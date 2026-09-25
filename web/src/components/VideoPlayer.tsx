@@ -47,6 +47,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
     const fallbackToHls = () => {
       setUseMjpegFallback(true);
       setIsStreaming(true);
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach(track => track.stop());
+        micStreamRef.current = null;
+        if (setIsMicActive) setIsMicActive(false);
+      }
     };
 
     pc = new RTCPeerConnection({

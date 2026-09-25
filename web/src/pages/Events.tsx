@@ -17,10 +17,11 @@ const Events: React.FC = () => {
   };
 
   useEffect(() => {
+    if (searchQuery.trim() !== '') return;
     loadEvents();
     const t = setInterval(loadEvents, 5000);
     return () => clearInterval(t);
-  }, []);
+  }, [searchQuery]);
 
   const handleVectorSearch = async (e: React.FormEvent) => {
     e.preventDefault();

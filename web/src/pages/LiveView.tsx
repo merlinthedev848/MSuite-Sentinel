@@ -116,6 +116,11 @@ const CameraFeedComponent: React.FC<{
     const fallbackToHls = () => {
       setUseMjpegFallback(true);
       setConnected(true);
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach(track => track.stop());
+        micStreamRef.current = null;
+        setIsMicActive(false);
+      }
     };
 
     pc = new RTCPeerConnection({ iceServers });
@@ -495,6 +500,15 @@ const CameraFeedComponent: React.FC<{
           <CamIcon size={12} />
         </button>
 
+        {/* Maximize in Grid */}
+        <button 
+          className="cam-btn" 
+          onClick={onMaximize} 
+          title="Maximize in Grid"
+        >
+          <Maximize2 size={12} />
+        </button>
+
         {/* Fullscreen Mode */}
         <button 
           className="cam-btn" 
@@ -510,6 +524,15 @@ const CameraFeedComponent: React.FC<{
   );
 };
 
+const DigitalClock = () => {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const tick = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(tick);
+  }, []);
+  return <>{now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} | {now.toLocaleTimeString('en-US', { hour12: false })}</>;
+};
+
 const LiveView: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('live');
   const [cameras, setCameras] = useState<Camera[]>([]);
@@ -519,7 +542,7 @@ const LiveView: React.FC = () => {
   const [maximizedId, setMaximizedId] = useState<string | null>(null);
   const [patrolMode, setPatrolMode] = useState(false);
   const [patrolOffset, setPatrolOffset] = useState<number>(0);
-  const [now, setNow] = useState(new Date());
+
   const [iceServers, setIceServers] = useState<RTCIceServer[]>([]);
   const [livePaused, setLivePaused] = useState(false);
   const [syncPaused, setSyncPaused] = useState(false);
@@ -529,10 +552,7 @@ const LiveView: React.FC = () => {
   const [syncWindowStart, setSyncWindowStart] = useState(Date.now() - 3 * 3600 * 1000);
   const syncVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
-  useEffect(() => {
-    const tick = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(tick);
-  }, []);
+  // (Clock moved to DigitalClock to prevent re-renders)
 
   const fetchData = async (loadConfig = false) => {
     try {
@@ -633,20 +653,7 @@ const LiveView: React.FC = () => {
     seekSyncVideos(target);
   };
 
-  const toggleTransport = () => {
-    if (viewMode === 'live' || viewMode === 'analytics') setLivePaused(p => !p);
-    if (viewMode === 'playback') {
-      setSyncPaused(p => {
-        const next = !p;
-        Object.values(syncVideoRefs.current).forEach(video => {
-          if (!video) return;
-          if (next) video.pause();
-          else video.play().catch(() => {});
-        });
-        return next;
-      });
-    }
-  };
+
 
   const GridIcon = ({ n }: { n: number }) => (
     <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor">
@@ -673,7 +680,7 @@ const LiveView: React.FC = () => {
 
         <div className="topbar-stats" style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
           <div style={{ fontSize: '0.8rem', color: 'var(--text-2)', fontFamily: 'JetBrains Mono, monospace' }}>
-            {now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} | {now.toLocaleTimeString('en-US', { hour12: false })}
+            <DigitalClock />
           </div>
           <div className="topbar-stat"><span className="topbar-stat-label">System Health</span><span className="topbar-stat-value ok">System OK</span></div>
           <div className="topbar-stat"><span className="topbar-stat-label">Cameras</span><span className="topbar-stat-value cyan">{onlineCams} / {cameras.length} Online</span></div>
@@ -767,7 +774,7 @@ const LiveView: React.FC = () => {
                   paused={livePaused}
                   analytics={viewMode === 'analytics'}
                   maximized={maximizedId === cam.id}
-                  onMaximize={() => setMaximizedId(maximizedId === cam.id ? null : cam.id)}
+                  onMaximize={() => setMaximizedId(prev => prev === cam.id ? null : cam.id)}
                 />
               ))}
             </div>

@@ -106,6 +106,8 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
           onMouseDown={() => handlePTZ('up')} 
           onMouseUp={stopPTZ}
           onMouseLeave={stopPTZ}
+          onTouchStart={(e) => { e.preventDefault(); handlePTZ('up'); }}
+          onTouchEnd={(e) => { e.preventDefault(); stopPTZ(); }}
           style={{ padding: '10px' }}
         >
           <ArrowUp size={18} />
@@ -117,6 +119,8 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
           onMouseDown={() => handlePTZ('left')} 
           onMouseUp={stopPTZ}
           onMouseLeave={stopPTZ}
+          onTouchStart={(e) => { e.preventDefault(); handlePTZ('left'); }}
+          onTouchEnd={(e) => { e.preventDefault(); stopPTZ(); }}
           style={{ padding: '10px' }}
         >
           <ArrowLeft size={18} />
@@ -129,6 +133,8 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
           onMouseDown={() => handlePTZ('right')} 
           onMouseUp={stopPTZ}
           onMouseLeave={stopPTZ}
+          onTouchStart={(e) => { e.preventDefault(); handlePTZ('right'); }}
+          onTouchEnd={(e) => { e.preventDefault(); stopPTZ(); }}
           style={{ padding: '10px' }}
         >
           <ArrowRight size={18} />
@@ -140,6 +146,8 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
           onMouseDown={() => handlePTZ('down')} 
           onMouseUp={stopPTZ}
           onMouseLeave={stopPTZ}
+          onTouchStart={(e) => { e.preventDefault(); handlePTZ('down'); }}
+          onTouchEnd={(e) => { e.preventDefault(); stopPTZ(); }}
           style={{ padding: '10px' }}
         >
           <ArrowDown size={18} />
@@ -154,6 +162,8 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
           onMouseDown={() => handlePTZ('zoom_in')} 
           onMouseUp={stopPTZ}
           onMouseLeave={stopPTZ}
+          onTouchStart={(e) => { e.preventDefault(); handlePTZ('zoom_in'); }}
+          onTouchEnd={(e) => { e.preventDefault(); stopPTZ(); }}
           style={{ fontSize: '0.75rem' }}
         >
           <ZoomIn size={14} /> Zoom +
@@ -163,6 +173,8 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
           onMouseDown={() => handlePTZ('zoom_out')} 
           onMouseUp={stopPTZ}
           onMouseLeave={stopPTZ}
+          onTouchStart={(e) => { e.preventDefault(); handlePTZ('zoom_out'); }}
+          onTouchEnd={(e) => { e.preventDefault(); stopPTZ(); }}
           style={{ fontSize: '0.75rem' }}
         >
           <ZoomOut size={14} /> Zoom -
