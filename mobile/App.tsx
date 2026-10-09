@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, SafeAreaView } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, SafeAreaView, FlatList, ScrollView } from 'react-native';
 
 export default function App() {
   const [serverUrl, setServerUrl] = useState('');
@@ -9,6 +9,8 @@ export default function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<any>(null);
+  const [cameras, setCameras] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
 
   const fetchHealth = async (url: string) => {
     const controller = new AbortController();
@@ -20,6 +22,17 @@ export default function App() {
     } finally {
       clearTimeout(timeout);
     }
+  };
+
+  const fetchDashboardData = async (url: string) => {
+    try {
+      const [camsRes, eventsRes] = await Promise.all([
+        fetch(`${url}/cameras`),
+        fetch(`${url}/events?limit=5`)
+      ]);
+      if (camsRes.ok) setCameras(await camsRes.json());
+      if (eventsRes.ok) setEvents(await eventsRes.json());
+    } catch {}
   };
 
   const handleConnect = async () => {
@@ -41,6 +54,7 @@ export default function App() {
       const nextHealth = await fetchHealth(formattedUrl);
       setHealth(nextHealth);
       setBaseUrl(formattedUrl);
+      await fetchDashboardData(formattedUrl);
       setIsConnecting(false);
       setIsConnected(true);
     } catch (e) {
@@ -52,6 +66,8 @@ export default function App() {
   const handleDisconnect = () => {
     setIsConnected(false);
     setHealth(null);
+    setCameras([]);
+    setEvents([]);
     setBaseUrl('');
     setServerUrl('');
   };
@@ -61,11 +77,12 @@ export default function App() {
     const timer = setInterval(async () => {
       try {
         setHealth(await fetchHealth(baseUrl));
+        await fetchDashboardData(baseUrl);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Lost connection to Sentinel server');
         setIsConnected(false);
       }
-    }, 15000);
+    }, 10000);
     return () => clearInterval(timer);
   }, [isConnected, baseUrl]);
 
@@ -129,41 +146,91 @@ export default function App() {
   }
 
   // -------------------------------------------------------------
-  // SCREEN: Dashboard (Placeholder)
+  // SCREEN: Dashboard
   // -------------------------------------------------------------
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
-      <View style={{ flex: 1, padding: 20 }}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 30 }}>
-          <Text style={[styles.title, { marginBottom: 0 }]}>Dashboard</Text>
+      <ScrollView style={{ flex: 1, padding: 20 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <Text style={[styles.title, { marginBottom: 0 }]}>Sentinel Mobile</Text>
           <View style={styles.statusBadge}>
             <View style={styles.statusDot} />
-            <Text style={styles.statusText}>Connected</Text>
+            <Text style={styles.statusText}>Live</Text>
           </View>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Live Cameras</Text>
-          <Text style={{ color: '#a1a1aa', marginTop: 10 }}>
-            Connected to {baseUrl}
+        {/* Health Card */}
+        <View style={[styles.card, { marginBottom: 16 }]}>
+          <Text style={styles.cardTitle}>Appliance Status</Text>
+          <Text style={{ color: '#a1a1aa', marginTop: 6, fontSize: 13 }}>
+            Server: {baseUrl}
           </Text>
-          <Text style={{ color: '#a1a1aa', marginTop: 10 }}>
-            CPU {typeof health?.cpu_usage_percent === 'number' ? `${health.cpu_usage_percent.toFixed(1)}%` : '--'} ·
-            Disk {typeof health?.storage?.usage_percent === 'number' ? `${health.storage.usage_percent}%` : '--'}
-          </Text>
+          <View style={{ flexDirection: 'row', gap: 16, marginTop: 12 }}>
+            <Text style={{ color: '#00d4ff', fontWeight: '600' }}>
+              CPU {typeof health?.cpu_usage_percent === 'number' ? `${health.cpu_usage_percent.toFixed(1)}%` : '--'}
+            </Text>
+            <Text style={{ color: '#10b981', fontWeight: '600' }}>
+              Disk {typeof health?.storage?.usage_percent === 'number' ? `${health.storage.usage_percent}%` : '--'}
+            </Text>
+            <Text style={{ color: '#f43f5e', fontWeight: '600' }}>
+              {cameras.length} Cameras
+            </Text>
+          </View>
+        </View>
+
+        {/* Cameras List */}
+        <View style={[styles.card, { marginBottom: 16 }]}>
+          <Text style={styles.cardTitle}>Configured Cameras ({cameras.length})</Text>
+          {cameras.length === 0 ? (
+            <Text style={{ color: '#71717a', marginTop: 10, fontSize: 13 }}>No cameras registered yet.</Text>
+          ) : (
+            cameras.map(cam => (
+              <View key={cam.id} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' }}>
+                <View>
+                  <Text style={{ color: '#f4f4f5', fontWeight: '600' }}>{cam.name}</Text>
+                  <Text style={{ color: '#71717a', fontSize: 12 }}>{cam.resolution || '1080p'}</Text>
+                </View>
+                <View style={{ backgroundColor: cam.status === 'offline' ? 'rgba(244,63,94,0.15)' : 'rgba(16,185,129,0.15)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                  <Text style={{ color: cam.status === 'offline' ? '#f43f5e' : '#10b981', fontSize: 12, fontWeight: '700' }}>
+                    {cam.status.toUpperCase()}
+                  </Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+
+        {/* Recent Detections */}
+        <View style={[styles.card, { marginBottom: 24 }]}>
+          <Text style={styles.cardTitle}>Recent AI Detections</Text>
+          {events.length === 0 ? (
+            <Text style={{ color: '#71717a', marginTop: 10, fontSize: 13 }}>No events detected.</Text>
+          ) : (
+            events.map((ev, i) => (
+              <View key={ev.id || i} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 }}>
+                <Text style={{ color: '#f4f4f5', fontSize: 13, textTransform: 'capitalize' }}>
+                  🚨 {ev.object_class || 'Motion'} ({Math.round((ev.confidence || 0) * 100)}%)
+                </Text>
+                <Text style={{ color: '#71717a', fontSize: 11 }}>
+                  {ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : '--'}
+                </Text>
+              </View>
+            ))
+          )}
         </View>
 
         <TouchableOpacity 
-          style={[styles.button, { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#3f3f46', marginTop: 'auto' }]} 
+          style={[styles.button, { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#3f3f46', marginBottom: 40 }]} 
           onPress={handleDisconnect}
         >
           <Text style={[styles.buttonText, { color: '#e4e4e7' }]}>Disconnect Server</Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {

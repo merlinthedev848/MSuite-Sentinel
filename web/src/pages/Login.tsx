@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Lock } from 'lucide-react';
+import { ShieldCheck, Lock, User } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
 
 interface LoginProps {
@@ -7,6 +7,7 @@ interface LoginProps {
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
+  const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,7 +21,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
     try {
       const formData = new URLSearchParams();
-      formData.append('username', 'admin');
+      formData.append('username', username.trim());
       formData.append('password', password);
 
       const res = await fetch(apiUrl('/auth/login'), {
@@ -35,7 +36,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         const data = await res.json();
         onLogin(data.access_token);
       } else {
-        setError('Invalid password');
+        setError('Invalid username or password');
       }
     } catch {
       setError('Network error connecting to API');
@@ -64,7 +65,22 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         <form onSubmit={handleSubmit} style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="form-group">
             <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Lock size={14} /> Admin Password
+              <User size={14} /> Username
+            </label>
+            <input
+              type="text"
+              className="form-input"
+              style={{ padding: '10px 14px', fontSize: '0.95rem' }}
+              placeholder="Username"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              autoCapitalize="none"
+            />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Lock size={14} /> Password
             </label>
             <input
               type="password"
@@ -89,3 +105,4 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 };
 
 export default Login;
+

@@ -1,12 +1,16 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSONResponse
 from contextlib import asynccontextmanager
 import os
 import logging
 import asyncio
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import aiofiles
+import httpx
+from jose import jwt, JWTError
 
 from api.database import engine, Base
 from api.models.user import User
@@ -15,7 +19,6 @@ from api.routers import cameras, recordings, events, system, auth, users, maps, 
 from api.services.recorder import recorder_manager
 from api.services.local_core import local_snapshot_worker
 from api.config import settings
-from jose import jwt, JWTError
 
 log = logging.getLogger("sentinel")
 
@@ -32,21 +35,22 @@ async def retention_worker():
             retention_days = settings.retention_days
             if retention_days and retention_days > 0:
                 from api.services.recorder import purge_old_recordings
-                purge_old_recordings(retention_days)
+                await asyncio.to_thread(purge_old_recordings, retention_days)
                 
                 # Clean up old database events
                 try:
                     from api.database import async_session_maker
                     from sqlalchemy import delete
                     from api.models.ai import SemanticEvent
-                    from datetime import datetime, timedelta
                     
-                    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+                    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
                     async with async_session_maker() as session:
                         await session.execute(delete(SemanticEvent).where(SemanticEvent.timestamp < cutoff))
                         await session.commit()
                 except Exception as e:
                     log.error(f"Failed to delete old events: {e}")
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             log.error(f"Error in retention worker: {e}")
         
@@ -76,6 +80,8 @@ async def auto_update_worker():
                     return
                 if status_payload.get("error"):
                     log.warning("Auto-update check failed: %s", status_payload["error"])
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             log.error("Error in auto-update worker: %s", e)
             sleep_seconds = 3600
@@ -86,6 +92,10 @@ async def auto_update_worker():
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────
     log.info("=== mView Sentinel starting up ===")
+
+    # Initialize shared HTTP client for proxying and external services
+    limits = httpx.Limits(max_keepalive_connections=50, max_connections=200)
+    app.state.http_client = httpx.AsyncClient(timeout=15.0, limits=limits)
 
     # DB tables
     from sqlalchemy import text, select
@@ -126,7 +136,7 @@ async def lifespan(app: FastAPI):
     await recorder_manager.sync_cameras(cams)
     log.info(f"Recorder started for {len(cams)} camera(s).")
 
-    # Start retention worker
+    # Start retention and background workers
     background_tasks = [
         asyncio.create_task(local_snapshot_worker(), name="local-core-snapshot"),
         asyncio.create_task(retention_worker(), name="retention-worker"),
@@ -142,32 +152,34 @@ async def lifespan(app: FastAPI):
             task.cancel()
         await asyncio.gather(*background_tasks, return_exceptions=True)
 
-    # ── Shutdown ─────────────────────────────────────────────────────
-    recorder_manager.stop_all()
-    await engine.dispose()
-    log.info("Sentinel shutdown complete.")
+        # ── Shutdown ─────────────────────────────────────────────────────
+        recorder_manager.stop_all()
+        if hasattr(app.state, "http_client") and app.state.http_client:
+            await app.state.http_client.aclose()
+        await engine.dispose()
+        log.info("Sentinel shutdown complete.")
 
 
 app = FastAPI(title="mView Sentinel", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-from fastapi.responses import JSONResponse
 
 @app.middleware("http")
-async def auth_middleware(request: Request, call_next):
+async def auth_and_security_middleware(request: Request, call_next):
     path = request.url.path
 
     if request.method == "OPTIONS":
         response = await call_next(request)
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 
     path_permissions = [
@@ -193,16 +205,21 @@ async def auth_middleware(request: Request, call_next):
     if request.method == "PATCH" and _re.match(r'^/users/[^/]+/password$', path):
         required = None  # just needs a valid JWT — enforced inside the route handler
 
-    client_host = request.client.host if request.client else ""
-    is_loopback = client_host in ("127.0.0.1", "::1", "localhost")
-    is_snapshot = path.endswith("/snapshot")
+    is_public = (
+        path.startswith("/system/health") or
+        path.startswith("/auth/login") or
+        path.startswith("/static/") or
+        path.startswith("/assets/") or
+        path in ("/docs", "/redoc", "/openapi.json")
+    )
+    is_media_token_path = path.startswith("/recordings/") or path.startswith("/system/") or path.endswith("/snapshot")
 
-    if required and not path.startswith("/system/health") and not is_loopback and not is_snapshot:
+    if required and not is_public:
         auth_header = request.headers.get("Authorization")
         token = None
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header.split(" ")[1]
-        elif path.startswith("/recordings/") or path.startswith("/system/") or is_snapshot:
+        elif is_media_token_path:
             token = request.query_params.get("token")
 
         if not token:
@@ -222,7 +239,9 @@ async def auth_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
+
 
 # ── API routers ────────────────────────────────────────────────────
 app.include_router(auth.router)
@@ -239,8 +258,7 @@ app.include_router(automations.router)
 
 @app.api_route("/go2rtc/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"])
 async def proxy_go2rtc(request: Request, path: str = ""):
-    """Proxy go2rtc API & WebRTC signaling directly through the main API port."""
-    import httpx
+    """Proxy go2rtc API & WebRTC signaling directly through the main API port using pooled HTTP client."""
     target_base = settings.go2rtc_url.rstrip("/")
     subpath = path if path.startswith("api/") or not path else f"api/{path}"
     target_url = f"{target_base}/{subpath}"
@@ -251,18 +269,22 @@ async def proxy_go2rtc(request: Request, path: str = ""):
     headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")}
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.request(
-                method=request.method,
-                url=target_url,
-                headers=headers,
-                content=body,
-            )
-            return StreamingResponse(
-                resp.aiter_bytes(),
-                status_code=resp.status_code,
-                headers={k: v for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-encoding", "transfer-encoding")}
-            )
+        client = getattr(request.app.state, "http_client", None)
+        if client is None:
+            client = httpx.AsyncClient(timeout=10.0)
+
+        req = client.build_request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body,
+        )
+        resp = await client.send(req, stream=True)
+        return StreamingResponse(
+            resp.aiter_bytes(),
+            status_code=resp.status_code,
+            headers={k: v for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-encoding", "transfer-encoding")}
+        )
     except Exception as e:
         raise HTTPException(502, f"go2rtc proxy error: {e}")
 
@@ -272,7 +294,7 @@ async def health():
     dist = Path(__file__).parent.parent / "web" / "dist"
     return {
         "status": "healthy",
-        "version": "1.0.0",
+        "version": settings.app_version,
         "frontend_built": dist.exists() and (dist / "index.html").exists(),
         "recording": recorder_manager.status(),
     }
@@ -306,19 +328,19 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
         if start > end or start >= file_size:
             raise HTTPException(416, "Requested range not satisfiable")
 
-        def iter_file():
-            with open(fp, "rb") as fh:
-                fh.seek(start)
+        async def async_iter_file():
+            async with aiofiles.open(fp, "rb") as fh:
+                await fh.seek(start)
                 remaining = end - start + 1
                 while remaining > 0:
-                    chunk = fh.read(min(1024 * 1024, remaining))
+                    chunk = await fh.read(min(1024 * 1024, remaining))
                     if not chunk:
                         break
                     remaining -= len(chunk)
                     yield chunk
 
         return StreamingResponse(
-            iter_file(),
+            async_iter_file(),
             status_code=206,
             media_type="video/mp4",
             headers={
@@ -384,3 +406,4 @@ async def serve_spa(request: Request, full_path: str):
 
     # Graceful fallback if the frontend was never built
     return HTMLResponse(FALLBACK_HTML, status_code=200)
+

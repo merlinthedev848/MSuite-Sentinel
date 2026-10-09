@@ -47,10 +47,30 @@ class ZoneAnalytics:
 
     def check_line_cross(self, object_track_history: list) -> list:
         """
-        Check if an object's trajectory intersects any defined lines.
-        object_track_history: list of previous bottom_center points
+        Check if an object's trajectory intersects any defined tripwire lines.
+        object_track_history: list of previous bottom_center points [(x1, y1), (x2, y2), ...]
+        Returns a list of line_ids crossed by the object.
         """
-        # Stub logic for intersection geometry
-        return []
+        if len(object_track_history) < 2:
+            return []
+
+        # Get last movement vector
+        p1 = object_track_history[-2]
+        p2 = object_track_history[-1]
+
+        def ccw(a, b, c):
+            return (c[1] - a[1]) * (b[0] - a[0]) > (b[1] - a[1]) * (c[0] - a[0])
+
+        def intersect(a, b, c, d):
+            return ccw(a, c, d) != ccw(b, c, d) and ccw(a, b, c) != ccw(a, b, d)
+
+        crossed_lines = []
+        for line_id, (l_pt1, l_pt2) in self.lines.items():
+            if intersect(p1, p2, l_pt1, l_pt2):
+                crossed_lines.append(line_id)
+
+        return crossed_lines
+
 
 zone_engine = ZoneAnalytics()
+

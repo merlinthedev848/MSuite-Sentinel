@@ -362,11 +362,12 @@ async def backup_database(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user["role"] != "admin":
+    if current_user.get("role") != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can create backups")
 
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = __import__("datetime").datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    from datetime import datetime, timezone
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     backup_path = EXPORT_DIR / f"mview-backup-{timestamp}.json"
 
     async def rows(model):
@@ -417,7 +418,7 @@ async def purge_recordings(camera_id: str | None = Query(default=None)):
 async def run_diagnostics(db: AsyncSession = Depends(get_db)):
     """Run an automated diagnostic audit on database, go2rtc, storage, and workers."""
     import httpx, shutil
-    from datetime import datetime
+    from datetime import datetime, timezone
     db_ok = False
     try:
         from sqlalchemy import select
@@ -457,7 +458,7 @@ async def run_diagnostics(db: AsyncSession = Depends(get_db)):
             "total_gb": total_gb,
             "usage_percent": usage_percent
         },
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -465,11 +466,16 @@ async def run_diagnostics(db: AsyncSession = Depends(get_db)):
 async def vacuum_database(db: AsyncSession = Depends(get_db)):
     """Re-index and clean orphaned records to optimize query speed."""
     from sqlalchemy import text
+    from api.database import engine as _engine
     try:
-        await db.execute(text("ANALYZE;"))
+        if _engine.dialect.name == "postgresql":
+            await db.execute(text("ANALYZE;"))
+        else:
+            await db.execute(text("VACUUM;"))
         return {"status": "success", "message": "Database query statistics re-indexed."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 
 @router.get("/config")

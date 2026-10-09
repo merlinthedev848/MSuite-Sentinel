@@ -179,7 +179,7 @@ async def health_center(db: AsyncSession = Depends(get_db)):
         issues.append({"scope": "setup", "severity": "medium", "message": "No cameras have been added yet"})
 
     return {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "summary": {
             "cameras": len(cameras),
             "recording": len(recorder_status),

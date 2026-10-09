@@ -4,30 +4,29 @@ import logging
 import os
 import uuid
 import aiofiles
+import httpx
 from aiomqtt import Client as MQTTClient
 from api.database import async_session_maker
 from api.models.ai import SemanticEvent
 from api.models.camera import Camera
 from api.config import settings
 from api.services.local_core import local_core
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger("mView-EventProcessor")
 
-def fetch_snapshot_sync(camera_id: str) -> bytes | None:
-    import urllib.request
-    try:
-        req = urllib.request.Request(f"http://127.0.0.1:1984/api/frame.jpeg?src={camera_id}")
-        with urllib.request.urlopen(req, timeout=4.0) as response:
-            if response.status == 200:
-                return response.read()
-    except Exception as e:
-        pass
-    return None
 
 async def capture_snapshot(camera_id: str) -> bytes | None:
-    import asyncio
-    return await asyncio.to_thread(fetch_snapshot_sync, camera_id)
+    """Fetch recent frame snapshot from go2rtc via async HTTP request."""
+    url = f"{settings.go2rtc_url.rstrip('/')}/api/frame.jpeg?src={camera_id}"
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                return resp.content
+    except Exception:
+        pass
+    return None
 
 MQTT_BROKER = settings.mqtt_broker
 MQTT_PORT = settings.mqtt_port
@@ -100,10 +99,11 @@ def _matching_zone(obj: dict, zones: list[dict], frame: dict | None) -> dict | N
 
     return None
 
+
 async def process_mqtt_events():
     """
     Background task that listens to MQTT events from the AI Detector
-    and persists them into the PostgreSQL database.
+    and persists them into the database with async processing.
     """
     logger.info(f"Connecting to MQTT Broker at {MQTT_BROKER}:{MQTT_PORT} to subscribe to events...")
     
@@ -114,7 +114,6 @@ async def process_mqtt_events():
                 logger.info("Subscribed to sentinel/events/#")
                 
                 async for message in client.messages:
-                    topic = message.topic.value
                     payload = message.payload.decode()
                     
                     try:
@@ -122,7 +121,12 @@ async def process_mqtt_events():
                         camera_id = data.get("camera_id")
                         objects = data.get("objects", [])
                         frame = data.get("frame") or {}
-                        timestamp = datetime.fromtimestamp(data.get("timestamp") or datetime.utcnow().timestamp())
+                        
+                        raw_ts = data.get("timestamp")
+                        if raw_ts:
+                            event_timestamp = datetime.fromtimestamp(raw_ts, tz=timezone.utc)
+                        else:
+                            event_timestamp = datetime.now(timezone.utc)
 
                         if not objects:
                             continue
@@ -142,8 +146,9 @@ async def process_mqtt_events():
 
                             # VLM Scene Interpretation (throttled to at most once per 10s per camera)
                             vlm_result = None
+                            snapshot_bytes = None
                             rtsp_url = camera.rtsp_url_sub or camera.rtsp_url_main
-                            now_ts = datetime.utcnow().timestamp()
+                            now_ts = datetime.now(timezone.utc).timestamp()
                             last_vlm = _LAST_VLM_ANALYSIS.get(camera_id, 0)
                             if rtsp_url and objects and (now_ts - last_vlm >= 10.0):
                                 _LAST_VLM_ANALYSIS[camera_id] = now_ts
@@ -182,18 +187,18 @@ async def process_mqtt_events():
                                 cooldown = float(zone.get("cooldown_seconds") or 60.0)
                                 cooldown_key = (str(camera_id), zone_id, str(obj.get("class") or "object"))
                                 last_seen = _LAST_ZONE_EVENTS.get(cooldown_key, 0)
-                                event_time = timestamp.timestamp()
+                                event_time = event_timestamp.timestamp()
                                 if event_time - last_seen < cooldown:
                                     continue
                                 _LAST_ZONE_EVENTS[cooldown_key] = event_time
 
                                 event_id = str(uuid.uuid4())
                                 thumb_path = None
-                                if 'snapshot_bytes' in locals() and snapshot_bytes:
+                                if snapshot_bytes:
                                     os.makedirs(settings.thumbnail_path, exist_ok=True)
                                     thumb_path = os.path.join(settings.thumbnail_path, f"{event_id}.jpg")
-                                    with open(thumb_path, "wb") as f:
-                                        f.write(snapshot_bytes)
+                                    async with aiofiles.open(thumb_path, "wb") as f:
+                                        await f.write(snapshot_bytes)
                                 
                                 session.add(SemanticEvent(
                                     id=event_id,
@@ -201,7 +206,7 @@ async def process_mqtt_events():
                                     embedding=embedding,
                                     object_class=object_class,
                                     confidence=obj.get("confidence"),
-                                    timestamp=timestamp,
+                                    timestamp=event_timestamp,
                                     thumbnail_path=thumb_path
                                 ))
                                 saved_count += 1
@@ -214,7 +219,7 @@ async def process_mqtt_events():
                                             "camera_id": camera_id,
                                             "object_class": object_class,
                                             "confidence": obj.get("confidence"),
-                                            "timestamp": timestamp.isoformat(),
+                                            "timestamp": event_timestamp.isoformat(),
                                             "threat_level": vlm_result.get("threat_level")
                                         }
                                         default_webhook = os.getenv("DEFAULT_DISCORD_WEBHOOK")
@@ -242,9 +247,9 @@ async def process_mqtt_events():
                                 await local_core.publish("ai_event", {
                                     "camera_id": camera_id,
                                     "count": saved_count,
-                                    "timestamp": timestamp.isoformat(),
+                                    "timestamp": event_timestamp.isoformat(),
                                 })
-                                logger.info(f"Saved {saved_count} events to Postgres with embeddings.")
+                                logger.info(f"Saved {saved_count} events to database with embeddings.")
                             
                     except json.JSONDecodeError:
                         logger.error("Failed to decode MQTT payload")
@@ -258,6 +263,7 @@ async def process_mqtt_events():
             logger.error(f"MQTT connection lost: {e}. Reconnecting in 5 seconds...")
             await asyncio.sleep(5)
 
-# Entry point for the background task
+
 if __name__ == "__main__":
     asyncio.run(process_mqtt_events())
+

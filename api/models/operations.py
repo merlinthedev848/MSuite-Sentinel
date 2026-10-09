@@ -1,9 +1,13 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, JSON, String
 
 from api.database import Base
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 
 class NVRConnection(Base):
@@ -19,8 +23,8 @@ class NVRConnection(Base):
     enabled = Column(Boolean, default=True)
     status = Column(String, default="configured", index=True)
     config = Column(JSON, nullable=False, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class AlertRule(Base):
@@ -31,8 +35,8 @@ class AlertRule(Base):
     enabled = Column(Boolean, default=True)
     severity = Column(String, default="medium")
     config = Column(JSON, nullable=False, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class PrivacyMode(Base):
@@ -42,8 +46,8 @@ class PrivacyMode(Base):
     name = Column(String, nullable=False)
     enabled = Column(Boolean, default=False)
     config = Column(JSON, nullable=False, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class EventReview(Base):
@@ -54,6 +58,6 @@ class EventReview(Base):
     verdict = Column(String, nullable=False, default="unreviewed")
     note = Column(String, nullable=True)
     config = Column(JSON, nullable=False, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 

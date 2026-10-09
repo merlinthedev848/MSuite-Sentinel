@@ -195,31 +195,60 @@ class PTZTourRequest(BaseModel):
     enabled: bool
     interval_seconds: int = 15
 
-# Global storage for camera PTZ presets and tour states
-_camera_ptz_presets: dict[str, list[str]] = {}
-_camera_ptz_tours: dict[str, bool] = {}
-
 @router.get("/{camera_id}/ptz/presets")
 async def get_ptz_presets(camera_id: str, db: AsyncSession = Depends(get_db)):
-    presets = _camera_ptz_presets.get(camera_id, ["Home Gate", "Driveway", "Front Yard"])
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = result.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(404, "Camera not found")
+    
+    config = cam.config or {}
+    ptz_config = config.get("ptz", {})
+    presets = ptz_config.get("presets", ["Home Gate", "Driveway", "Front Yard"])
     return {"presets": presets}
 
 @router.post("/{camera_id}/ptz/presets")
 async def save_ptz_preset(camera_id: str, req: PTZPresetRequest, db: AsyncSession = Depends(get_db)):
-    if camera_id not in _camera_ptz_presets:
-        _camera_ptz_presets[camera_id] = ["Home Gate", "Driveway", "Front Yard"]
-    if req.name not in _camera_ptz_presets[camera_id]:
-        _camera_ptz_presets[camera_id].append(req.name)
-    return {"status": "success", "presets": _camera_ptz_presets[camera_id]}
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = result.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(404, "Camera not found")
+
+    config = dict(cam.config or {})
+    ptz_config = dict(config.get("ptz", {}))
+    presets = list(ptz_config.get("presets", ["Home Gate", "Driveway", "Front Yard"]))
+    if req.name.strip() and req.name.strip() not in presets:
+        presets.append(req.name.strip())
+    ptz_config["presets"] = presets
+    config["ptz"] = ptz_config
+    cam.config = config
+    await db.commit()
+    return {"status": "success", "presets": presets}
 
 @router.post("/{camera_id}/ptz/goto")
 async def goto_ptz_preset(camera_id: str, req: PTZPresetRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = result.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(404, "Camera not found")
     return {"status": "moved", "target": req.name}
 
 @router.post("/{camera_id}/ptz/tour")
 async def toggle_ptz_tour(camera_id: str, req: PTZTourRequest, db: AsyncSession = Depends(get_db)):
-    _camera_ptz_tours[camera_id] = req.enabled
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = result.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(404, "Camera not found")
+
+    config = dict(cam.config or {})
+    ptz_config = dict(config.get("ptz", {}))
+    ptz_config["tour_enabled"] = req.enabled
+    ptz_config["tour_interval"] = req.interval_seconds
+    config["ptz"] = ptz_config
+    cam.config = config
+    await db.commit()
     return {"status": "tour_updated", "enabled": req.enabled, "interval": req.interval_seconds}
+
 
 
 @router.post("/discover", response_model=List[ONVIFDiscoveryResult])

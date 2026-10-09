@@ -11,6 +11,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const MapView = lazy(() => import('./pages/MapView'));
 const Playback = lazy(() => import('./pages/Playback'));
 const Events = lazy(() => import('./pages/Events'));
+const Operations = lazy(() => import('./pages/Operations'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Wallboard = lazy(() => import('./pages/Wallboard'));
 
@@ -121,12 +122,13 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
   const unreadEvents = events.length;
 
   const navItems = [
-    { to: '/dashboard', label: 'Dashboard',   icon: <LayoutDashboard size={16} />, end: false },
-    { to: '/',          label: 'Live View',   icon: <Video           size={16} />, end: true  },
-    { to: '/map',       label: 'Spatial Map', icon: <Map             size={16} />, end: false },
-    { to: '/playback',  label: 'Playback',    icon: <PlaySquare      size={16} />, end: false },
-    { to: '/events',    label: 'Events',      icon: <Bell            size={16} />, end: false, badge: unreadEvents || undefined },
-    { to: '/settings',  label: 'Settings',    icon: <SettingsIcon    size={16} />, end: false },
+    { to: '/dashboard',  label: 'Dashboard',   icon: <LayoutDashboard size={16} />, end: false },
+    { to: '/',           label: 'Live View',   icon: <Video           size={16} />, end: true  },
+    { to: '/map',        label: 'Spatial Map', icon: <Map             size={16} />, end: false },
+    { to: '/playback',   label: 'Playback',    icon: <PlaySquare      size={16} />, end: false },
+    { to: '/events',     label: 'Events',      icon: <Bell            size={16} />, end: false, badge: unreadEvents || undefined },
+    { to: '/operations', label: 'Operations',  icon: <HardDrive       size={16} />, end: false },
+    { to: '/settings',   label: 'Settings',    icon: <SettingsIcon    size={16} />, end: false },
   ];
 
   return (
@@ -408,12 +410,13 @@ function App() {
         <div className="main-content">
           <Suspense fallback={<div className="empty">Loading...</div>}>
             <Routes>
-              <Route path="/"         element={<LiveView />}  />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/map"      element={<MapView />}   />
-              <Route path="/playback" element={<Playback />}  />
-              <Route path="/events"   element={<Events />}    />
-              <Route path="/settings" element={<Settings />}  />
+              <Route path="/"           element={<LiveView />}    />
+              <Route path="/dashboard"  element={<Dashboard />}   />
+              <Route path="/map"        element={<MapView />}     />
+              <Route path="/playback"   element={<Playback />}    />
+              <Route path="/events"     element={<Events />}      />
+              <Route path="/operations" element={<Operations />}  />
+              <Route path="/settings"   element={<Settings />}    />
             </Routes>
           </Suspense>
         </div>

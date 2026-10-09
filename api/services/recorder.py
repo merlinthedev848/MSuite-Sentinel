@@ -1,18 +1,10 @@
-"""
-Recorder Service — FFmpeg-based 24/7 recording engine.
-
-For each enabled camera, spawns an ffmpeg process that:
-  - Reads the RTSP stream (video + audio)
-  - Segments recordings into short MP4 files under /recordings/{camera_id}/
-  - Auto-restarts on stream drop (with backoff)
-"""
-
 import asyncio
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import httpx
 from api.config import settings
 from api.services.local_core import local_core
 
@@ -24,6 +16,13 @@ RECORD_SUBSTREAM_DEFAULT = settings.record_substream_default
 RECORD_VIDEO_CODEC = settings.record_video_codec.lower()
 RECORD_VIDEO_CRF = settings.record_video_crf
 RECORD_VIDEO_PRESET = settings.record_video_preset
+
+
+def mask_rtsp_url(url: str | None) -> str:
+    """Mask credentials in RTSP URLs for secure logging and diagnostics."""
+    if not url:
+        return ""
+    return re.sub(r'(rtsp(?:s)?://[^:\s/@]+:)([^@\s]+)(@)', r'\1*****\3', url)
 
 
 class CameraRecorder:
@@ -51,7 +50,7 @@ class CameraRecorder:
         backoff = 5
         while not self._stop:
             try:
-                self.last_started_at = datetime.utcnow()
+                self.last_started_at = datetime.now(timezone.utc)
                 self.last_error = None
                 await self._record_once()
                 backoff = 5  # reset on clean exit
@@ -183,15 +182,13 @@ class CameraRecorder:
 
 
 async def register_go2rtc_stream(name: str, rtsp_url: str):
-    import httpx
     url = settings.go2rtc_url.rstrip('/')
     for attempt in range(1, 6):
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=3.0) as client:
                 res = await client.put(
                     f"{url}/api/streams",
                     params={"name": name, "src": rtsp_url},
-                    timeout=2.0
                 )
                 if res.status_code == 200:
                     logger.info(f"Successfully registered stream {name} in go2rtc (attempt {attempt})")
@@ -207,10 +204,9 @@ async def register_go2rtc_stream(name: str, rtsp_url: str):
 
 
 async def delete_go2rtc_stream(name: str):
-    import httpx
     url = settings.go2rtc_url.rstrip('/')
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=3.0) as client:
             res = await client.delete(f"{url}/api/streams", params={"name": name})
             if res.status_code == 200:
                 logger.info(f"Successfully deleted stream {name} from go2rtc")
@@ -219,7 +215,7 @@ async def delete_go2rtc_stream(name: str):
     except Exception as e:
         logger.warning(f"Could not connect to go2rtc API at {url} to delete stream: {e}")
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=3.0) as client:
                 await client.delete("http://127.0.0.1:1984/api/streams", params={"name": name})
         except Exception:
             pass
@@ -249,7 +245,6 @@ class RecorderManager:
         # Start new or update changed cameras
         for cam in cameras:
             if cam.enabled and cam.rtsp_url_main:
-                # Prefer substream for storage savings when enabled globally or per camera.
                 use_substream = RECORD_SUBSTREAM_DEFAULT
                 if cam.config and "record_substream" in cam.config:
                     use_substream = cam.config.get("record_substream") is True
@@ -260,7 +255,7 @@ class RecorderManager:
                     self._recorders[cam.id] = rec
                     rec.start()
                     await local_core.publish("recorder_started", {"camera_id": cam.id, "camera_name": cam.name})
-                    logger.info(f"Started recorder for [{cam.name}] → {record_url}")
+                    logger.info(f"Started recorder for [{cam.name}] → {mask_rtsp_url(record_url)}")
                     live_url = cam.rtsp_url_sub or cam.rtsp_url_main
                     asyncio.create_task(register_go2rtc_stream(cam.id, live_url))
                     asyncio.create_task(register_go2rtc_stream(f"{cam.id}_main", cam.rtsp_url_main))
@@ -294,7 +289,7 @@ class RecorderManager:
             cid: {
                 "status": "recording",
                 "camera_name": rec.camera_name,
-                "stream_url": rec.rtsp_url,
+                "stream_url": mask_rtsp_url(rec.rtsp_url),
                 "started_at": rec.last_started_at.isoformat() if rec.last_started_at else None,
                 "restart_count": rec.restart_count,
                 "last_error": rec.last_error,
@@ -380,7 +375,7 @@ def list_recordings(camera_id: str | None = None) -> list[dict]:
 def storage_report() -> dict:
     """Return per-camera recording storage usage and simple retention estimates."""
     base = RECORDINGS_BASE
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     report = {
         "segment_seconds": SEGMENT_DURATION,
         "record_substream_default": RECORD_SUBSTREAM_DEFAULT,
@@ -403,7 +398,7 @@ def storage_report() -> dict:
                 stat = f.stat()
             except OSError:
                 continue
-            mtime = datetime.fromtimestamp(stat.st_mtime)
+            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
             cam_bytes += stat.st_size
             if (now - mtime).total_seconds() <= 24 * 3600:
                 day_bytes += stat.st_size
@@ -479,8 +474,7 @@ def purge_old_recordings(retention_days: int):
         return
     
     logger.info(f"Running auto-purge worker... (retention: {retention_days} days)")
-    from datetime import datetime, timedelta
-    cutoff = datetime.now() - timedelta(days=retention_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     purged_count = 0
     purged_bytes = 0
     
@@ -493,7 +487,7 @@ def purge_old_recordings(retention_days: int):
         for f in cam_dir.glob("*.mp4"):
             try:
                 stat = f.stat()
-                file_time = datetime.fromtimestamp(stat.st_mtime)
+                file_time = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
                 if file_time < cutoff:
                     file_size = stat.st_size
                     f.unlink()
@@ -504,3 +498,4 @@ def purge_old_recordings(retention_days: int):
                 
     if purged_count > 0:
         logger.info(f"Auto-purge complete. Deleted {purged_count} files ({round(purged_bytes / 1_048_576, 1)} MB)")
+

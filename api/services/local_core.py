@@ -13,7 +13,7 @@ import json
 import logging
 import shutil
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import psutil
@@ -48,7 +48,7 @@ class LocalCore:
         event = {
             "type": event_type,
             "payload": payload,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         async with self._lock:
             subscribers = list(self._subscribers)
@@ -61,7 +61,7 @@ class LocalCore:
     async def update_snapshot(self, **values: Any) -> dict[str, Any]:
         async with self._lock:
             self._snapshot.update(values)
-            self._snapshot["updated_at"] = datetime.utcnow().isoformat()
+            self._snapshot["updated_at"] = datetime.now(timezone.utc).isoformat()
             snapshot = dict(self._snapshot)
         await self.publish("snapshot", snapshot)
         return snapshot

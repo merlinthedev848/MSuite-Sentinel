@@ -1,9 +1,11 @@
+import asyncio
+import logging
 import os
 import shutil
-import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("mView-StorageMigration")
+
 
 class StorageTierMigration:
     """
@@ -15,16 +17,16 @@ class StorageTierMigration:
         self.cold_storage_dir = os.getenv("COLD_STORAGE_PATH", "/mnt/archive/mview/recordings")
         self.migrate_after_days = int(os.getenv("MIGRATE_AFTER_DAYS", "3"))
 
-    def run_migration(self):
+    def run_migration(self) -> dict:
         """Scan hot storage and move files older than threshold to cold storage."""
         if not os.path.exists(self.cold_storage_dir):
             try:
                 os.makedirs(self.cold_storage_dir, exist_ok=True)
             except Exception as e:
                 logger.error(f"Cold storage not accessible: {e}")
-                return
+                return {"files_migrated": 0, "bytes_migrated": 0, "error": str(e)}
 
-        cutoff_time = datetime.now() - timedelta(days=self.migrate_after_days)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(days=self.migrate_after_days)
         files_migrated = 0
         bytes_migrated = 0
 
@@ -34,7 +36,10 @@ class StorageTierMigration:
                     continue
                     
                 file_path = os.path.join(root, file)
-                file_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                try:
+                    file_time = datetime.fromtimestamp(os.path.getmtime(file_path), tz=timezone.utc)
+                except OSError:
+                    continue
 
                 if file_time < cutoff_time:
                     # Maintain directory structure
@@ -54,5 +59,16 @@ class StorageTierMigration:
 
         if files_migrated > 0:
             logger.info(f"Storage Migration Complete: Moved {files_migrated} segments ({round(bytes_migrated / (1024**3), 2)} GB) to cold storage.")
+
+        return {
+            "files_migrated": files_migrated,
+            "bytes_migrated": bytes_migrated,
+            "gb_migrated": round(bytes_migrated / (1024**3), 3),
+        }
+
+    async def run_migration_async(self) -> dict:
+        """Asynchronously run migration in a worker thread to prevent event loop stalls."""
+        return await asyncio.to_thread(self.run_migration)
+
 
 storage_migration_service = StorageTierMigration()

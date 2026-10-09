@@ -33,6 +33,8 @@ def _write_config(config: dict) -> None:
     import json
     CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
+import aiofiles
+
 @router.post("/upload")
 async def upload_floorplan(file: UploadFile = File(...)):
     """Upload a floorplan image to the server."""
@@ -40,14 +42,19 @@ async def upload_floorplan(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Invalid image file")
     
     file_id = str(uuid.uuid4())
-    ext = (file.filename or "floorplan.png").split(".")[-1].lower()
+    raw_name = file.filename or "floorplan.png"
+    ext = raw_name.rsplit(".", 1)[-1].lower() if "." in raw_name else "png"
     if ext not in {"png", "jpg", "jpeg", "webp"}:
         raise HTTPException(status_code=400, detail="Unsupported image type")
-    filename = f"{file_id}.{ext}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
     
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    filename = f"{file_id}.{ext}"
+    target_path = (Path(UPLOAD_DIR) / filename).resolve()
+    if Path(UPLOAD_DIR).resolve() not in target_path.parents:
+        raise HTTPException(status_code=400, detail="Invalid destination path")
+    
+    async with aiofiles.open(target_path, "wb") as buffer:
+        while chunk := await file.read(1024 * 1024):
+            await buffer.write(chunk)
 
     config = _read_config()
     config.update({"map_id": file_id, "floorplan_url": _public_url(filename), "floorplan_file": filename})
@@ -55,6 +62,7 @@ async def upload_floorplan(file: UploadFile = File(...)):
     _write_config(config)
 
     return {"status": "success", "map_id": file_id, "url": _public_url(filename)}
+
 
 @router.post("/{map_id}/cameras")
 async def save_camera_positions(map_id: str, positions: list = Body(...), db: AsyncSession = Depends(get_db)):

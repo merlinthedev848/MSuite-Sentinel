@@ -1,9 +1,14 @@
 import uuid
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, DateTime, Float, ForeignKey
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
-from datetime import datetime
 from api.database import Base
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
 
 class Face(Base):
     """
@@ -18,7 +23,8 @@ class Face(Base):
     embedding = Column(Vector(512), nullable=False)
     
     thumbnail_path = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
 
 class SemanticEvent(Base):
     """
@@ -34,9 +40,9 @@ class SemanticEvent(Base):
     # 512-Dimensional vector from CLIP (optional — not all detectors produce this)
     embedding = Column(Vector(512), nullable=True)
     
-    object_class = Column(String, nullable=True) # e.g., "person", "car"
+    object_class = Column(String, nullable=True, index=True)  # e.g., "person", "car"
     confidence = Column(Float, nullable=True)
     
     thumbnail_path = Column(String, nullable=True)
     clip_path = Column(String, nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime(timezone=True), default=utc_now, index=True)

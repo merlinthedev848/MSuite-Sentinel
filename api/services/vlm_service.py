@@ -1,16 +1,25 @@
 import base64
 import json
 import logging
+from typing import Optional
 import httpx
 from api.config import settings
 
 logger = logging.getLogger("mView-VLM")
+
 
 class VLMService:
     """
     Multimodal Vision-Language Model analyzer.
     Supports local fallback, Google Gemini API, and OpenAI GPT API.
     """
+    def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
+        self._http_client = http_client
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(timeout=10.0)
+        return self._http_client
 
     def _clean_json_text(self, text: str) -> str:
         text = text.strip()
@@ -70,14 +79,14 @@ class VLMService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    text = data["candidates"][0]["content"]["parts"][0]["text"]
-                    return json.loads(self._clean_json_text(text))
-                else:
-                    logger.error(f"Gemini API returned status {resp.status_code}: {resp.text}")
+            client = await self._get_client()
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                return json.loads(self._clean_json_text(text))
+            else:
+                logger.error(f"Gemini API returned status {resp.status_code}: {resp.text}")
         except Exception as e:
             logger.error(f"Failed to analyze frame with Gemini: {e}")
 
@@ -119,14 +128,14 @@ class VLMService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, headers=headers, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    text = data["choices"][0]["message"]["content"]
-                    return json.loads(self._clean_json_text(text))
-                else:
-                    logger.error(f"OpenAI API returned status {resp.status_code}: {resp.text}")
+            client = await self._get_client()
+            resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data["choices"][0]["message"]["content"]
+                return json.loads(self._clean_json_text(text))
+            else:
+                logger.error(f"OpenAI API returned status {resp.status_code}: {resp.text}")
         except Exception as e:
             logger.error(f"Failed to analyze frame with OpenAI: {e}")
 
@@ -152,5 +161,10 @@ class VLMService:
             "description": f"Visual alert: {objects_desc} identified in frame.",
             "threat_level": threat
         }
+
+    async def close(self):
+        if self._http_client and not self._http_client.is_closed:
+            await self._http_client.aclose()
+
 
 vlm_service = VLMService()

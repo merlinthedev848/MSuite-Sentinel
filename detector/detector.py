@@ -6,6 +6,7 @@ import logging
 from ultralytics import YOLO
 import paho.mqtt.client as mqtt
 from semantic_search import semantic_engine
+from motion import motion_gate
 from PIL import Image
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -19,6 +20,7 @@ FRAME_STRIDE = max(1, int(os.getenv("FRAME_STRIDE", "6")))
 IMAGE_SIZE = int(os.getenv("IMAGE_SIZE", "640"))
 MIN_CONFIDENCE = float(os.getenv("MIN_CONFIDENCE", "0.5"))
 EVENT_COOLDOWN_SECONDS = float(os.getenv("EVENT_COOLDOWN_SECONDS", "5"))
+ENABLE_MOTION_GATING = os.getenv("ENABLE_MOTION_GATING", "true").lower() in ("true", "1", "yes")
 DETECT_CLASSES = [
     int(value)
     for value in os.getenv("DETECT_CLASSES", "0,2,3,5,7").split(",")
@@ -104,6 +106,10 @@ class DetectorNode:
             # Process every Nth frame to save CPU (e.g., 5 fps)
             frame_count += 1
             if frame_count % FRAME_STRIDE != 0:
+                continue
+
+            # Motion gating pre-filter to skip idle frames without running heavy neural networks
+            if ENABLE_MOTION_GATING and not motion_gate.has_motion(frame):
                 continue
 
             frame_h, frame_w = frame.shape[:2]
