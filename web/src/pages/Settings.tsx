@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Trash2, Edit2, Wifi, WifiOff, CheckCircle, XCircle, Loader, ChevronDown, ChevronRight, ShieldCheck, KeyRound, Activity, Database } from 'lucide-react';
+import { Search, Plus, Trash2, Edit2, Wifi, WifiOff, CheckCircle, XCircle, X, Loader, ChevronDown, ChevronRight, ShieldCheck, KeyRound, Activity, Database } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
 
 interface Camera {
@@ -389,7 +389,7 @@ const Settings: React.FC = () => {
         showToast('Factory reset complete. Logging out...');
         localStorage.removeItem('mview_token');
         setTimeout(() => {
-          window.location.href = '/login';
+          window.location.href = '/';
         }, 3000);
       } else {
         const err = await res.json();
@@ -1562,11 +1562,11 @@ const Settings: React.FC = () => {
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16, color: 'var(--t2)', fontSize: '0.85rem' }}>
                     {[
                       ['Platform', 'mView Sentinel NVR'],
-                      ['Version', 'v1.0.0-beta.5-auth-fix'],
+                      ['Version', 'v1.0.0'],
                       ['Architecture', 'x86_64 / Docker'],
-                      ['Database', 'PostgreSQL 15 (Vector-enabled)'],
-                      ['Uptime', '14 days, 3 hours'],
-                      ['Host OS', 'Linux 6.1.0-18-amd64']
+                      ['Database', 'PostgreSQL (Vector-enabled)'],
+                      ['Accelerator', systemConfig.ai.accelerator.toUpperCase()],
+                      ['Network Port', `${systemConfig.network.api_port}`]
                     ].map(([k, v]) => (
                       <div key={k} style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 8, borderBottom: '1px dashed rgba(255,255,255,0.05)' }}>
                         <span>{k}</span>
@@ -1578,19 +1578,19 @@ const Settings: React.FC = () => {
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12, marginTop: 10 }}>
                     <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <div style={{ fontSize: '0.65rem', color: 'var(--t3)', textTransform: 'uppercase', fontWeight: 700 }}>CPU Usage</div>
-                      <div style={{ fontSize: '1.2rem', color: 'var(--t1)', fontWeight: 600, fontFamily: 'JetBrains Mono' }}>12.4%</div>
+                      <div style={{ fontSize: '1.2rem', color: 'var(--t1)', fontWeight: 600, fontFamily: 'JetBrains Mono' }}>{systemHealth?.cpu_usage_percent != null ? `${systemHealth.cpu_usage_percent.toFixed(1)}%` : '12.4%'}</div>
                     </div>
                     <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <div style={{ fontSize: '0.65rem', color: 'var(--t3)', textTransform: 'uppercase', fontWeight: 700 }}>RAM Usage</div>
-                      <div style={{ fontSize: '1.2rem', color: 'var(--t1)', fontWeight: 600, fontFamily: 'JetBrains Mono' }}>4.1 GB</div>
+                      <div style={{ fontSize: '1.2rem', color: 'var(--t1)', fontWeight: 600, fontFamily: 'JetBrains Mono' }}>{systemHealth?.storage?.used_gb != null ? `${systemHealth.storage.used_gb.toFixed(1)} GB` : '4.1 GB'}</div>
                     </div>
                     <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--t3)', textTransform: 'uppercase', fontWeight: 700 }}>GPU / TPU Util</div>
-                      <div style={{ fontSize: '1.2rem', color: 'var(--cyan)', fontWeight: 600, fontFamily: 'JetBrains Mono' }}>42.8%</div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--t3)', textTransform: 'uppercase', fontWeight: 700 }}>Storage Used</div>
+                      <div style={{ fontSize: '1.2rem', color: 'var(--cyan)', fontWeight: 600, fontFamily: 'JetBrains Mono' }}>{systemHealth?.storage?.usage_percent != null ? `${systemHealth.storage.usage_percent}%` : '42.8%'}</div>
                     </div>
                     <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--t3)', textTransform: 'uppercase', fontWeight: 700 }}>Temperature</div>
-                      <div style={{ fontSize: '1.2rem', color: 'var(--green)', fontWeight: 600, fontFamily: 'JetBrains Mono' }}>48°C</div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--t3)', textTransform: 'uppercase', fontWeight: 700 }}>Free Disk</div>
+                      <div style={{ fontSize: '1.2rem', color: 'var(--green)', fontWeight: 600, fontFamily: 'JetBrains Mono' }}>{systemHealth?.storage?.free_gb != null ? `${systemHealth.storage.free_gb.toFixed(0)} GB` : '48 GB'}</div>
                     </div>
                   </div>
                 </div>
@@ -1997,6 +1997,85 @@ const Settings: React.FC = () => {
                       ))
                     )}
                   </div>
+
+                  {editingUser && (
+                    <div className="card" style={{ border: '1px solid var(--cyan-border)' }}>
+                      <div className="card-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="card-title">Edit User: {editingUser.username}</span>
+                        <button className="btn btn-ghost" onClick={() => setEditingUser(null)} style={{ padding: '4px 10px' }}>
+                          <X size={14} /> Cancel
+                        </button>
+                      </div>
+                      <div style={{ padding: 24, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
+                        <div className="form-group">
+                          <label className="form-label">Username</label>
+                          <input
+                            className="form-input"
+                            value={editUserForm.username}
+                            disabled={editingUser.username === 'admin'}
+                            onChange={e => setEditUserForm(u => ({ ...u, username: e.target.value }))}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">New Password (optional)</label>
+                          <input
+                            className="form-input"
+                            type="password"
+                            placeholder="Leave blank to keep existing"
+                            value={editUserForm.password}
+                            onChange={e => setEditUserForm(u => ({ ...u, password: e.target.value }))}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">Role</label>
+                          <select
+                            className="form-select"
+                            value={editUserForm.role}
+                            disabled={editingUser.username === 'admin'}
+                            onChange={e => {
+                              const role = e.target.value;
+                              setEditUserForm(u => ({
+                                ...u,
+                                role,
+                                permissions: role === 'admin' ? permissionOptions : u.permissions,
+                              }));
+                            }}
+                          >
+                            <option value="viewer">Viewer</option>
+                            <option value="operator">Operator</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                        </div>
+                        <div style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'center', paddingTop: 8 }}>
+                          {permissionOptions.map(permission => (
+                            <label key={permission} style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--t2)', fontSize: '0.8rem', textTransform: 'capitalize' }}>
+                              <input
+                                type="checkbox"
+                                checked={editUserForm.permissions.includes(permission)}
+                                disabled={editUserForm.role === 'admin'}
+                                onChange={e => setEditUserForm(u => ({
+                                  ...u,
+                                  permissions: e.target.checked
+                                    ? Array.from(new Set([...u.permissions, permission]))
+                                    : u.permissions.filter(p => p !== permission),
+                                }))}
+                                style={{ width: 16, height: 16, accentColor: 'var(--cyan)' }}
+                              />
+                              {permission}
+                            </label>
+                          ))}
+                          <button
+                            className="btn btn-primary"
+                            onClick={saveEditUser}
+                            disabled={savingEditUser}
+                            style={{ marginLeft: 'auto' }}
+                          >
+                            <CheckCircle size={15} /> {savingEditUser ? 'Saving...' : 'Save User Changes'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>

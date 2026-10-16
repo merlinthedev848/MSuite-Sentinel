@@ -12,7 +12,7 @@ from api.routers.auth import get_current_user, get_password_hash, verify_passwor
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-Permission = Literal["live", "playback", "events", "settings"]
+Permission = Literal["live", "playback", "events", "settings", "operations"]
 Role = Literal["admin", "operator", "viewer"]
 
 
@@ -44,7 +44,7 @@ class UserUpdate(BaseModel):
 
 
 def _admin_permissions(role: str, permissions: list[str]) -> list[str]:
-    return ["live", "playback", "events", "settings"] if role == "admin" else permissions
+    return ["live", "playback", "events", "settings", "operations"] if role == "admin" else permissions
 
 
 def _serialize(user: User) -> UserResponse:

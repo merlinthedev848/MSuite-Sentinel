@@ -6,6 +6,7 @@ import uuid
 import aiofiles
 import httpx
 from aiomqtt import Client as MQTTClient
+from sqlalchemy import select
 from api.database import async_session_maker
 from api.models.ai import SemanticEvent
 from api.models.camera import Camera

@@ -37,3 +37,18 @@ class Camera(Base):
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    @property
+    def location(self) -> str | None:
+        if isinstance(self.config, dict):
+            return self.config.get("location")
+        return None
+
+    @location.setter
+    def location(self, value: str | None) -> None:
+        if value is None:
+            return
+        cfg = dict(self.config) if isinstance(self.config, dict) else {}
+        cfg["location"] = value
+        self.config = cfg
+

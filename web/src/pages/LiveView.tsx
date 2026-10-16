@@ -333,7 +333,13 @@ const CameraFeedComponent: React.FC<{
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {cam.status === 'recording' && <div className="cam-rec"><div className="cam-rec-dot" /> REC</div>}
-          <button className="cam-more">...</button>
+          <button
+            className="cam-more"
+            title={cam.onvif_endpoint ? 'Toggle PTZ Controls' : 'Toggle Maximize'}
+            onClick={() => (cam.onvif_endpoint ? setShowPTZ(v => !v) : onMaximize?.())}
+          >
+            ...
+          </button>
         </div>
       </div>
 
@@ -679,12 +685,20 @@ const LiveView: React.FC = () => {
         </div>
 
         <div className="topbar-stats" style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-2)', fontFamily: 'JetBrains Mono, monospace' }}>
+          <div style={{ fontSize: '0.8rem', color: 'var(--t2)', fontFamily: 'JetBrains Mono, monospace' }}>
             <DigitalClock />
           </div>
           <div className="topbar-stat"><span className="topbar-stat-label">System Health</span><span className="topbar-stat-value ok">System OK</span></div>
           <div className="topbar-stat"><span className="topbar-stat-label">Cameras</span><span className="topbar-stat-value cyan">{onlineCams} / {cameras.length} Online</span></div>
           <div className="topbar-stat"><span className="topbar-stat-label">AI Status</span><span className="topbar-stat-value" style={{ color: 'var(--pink)' }}>Active</span></div>
+          <button
+            className={`layout-btn${livePaused ? ' active' : ''}`}
+            title={livePaused ? 'Resume Live Feeds' : 'Pause Live Feeds'}
+            onClick={() => setLivePaused(p => !p)}
+            style={{ fontSize: '0.7rem', padding: '0 8px' }}
+          >
+            {livePaused ? 'Resume' : 'Pause'}
+          </button>
           <button className="layout-btn" title="Wallboard Popout" onClick={() => window.open('/wallboard', '_blank')}>
             <ExternalLink size={14} />
           </button>
@@ -712,6 +726,20 @@ const LiveView: React.FC = () => {
             <input className="form-input" type="date" value={syncDate} onChange={e => setSyncDate(e.target.value)} style={{ width: 150 }} />
             <input className="form-input" type="time" value={syncTime} onChange={e => setSyncTime(e.target.value)} style={{ width: 120 }} />
             <button className="btn btn-primary" onClick={jumpSyncPlayback}>Jump All Cameras</button>
+            <button
+              className="btn btn-ghost"
+              onClick={() => {
+                const next = !syncPaused;
+                setSyncPaused(next);
+                Object.values(syncVideoRefs.current).forEach(video => {
+                  if (!video) return;
+                  if (next) video.pause();
+                  else video.play().catch(() => {});
+                });
+              }}
+            >
+              {syncPaused ? 'Play All' : 'Pause All'}
+            </button>
             <input
               type="range"
               min="0"

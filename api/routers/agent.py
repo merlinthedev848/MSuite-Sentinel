@@ -34,7 +34,7 @@ async def run_get_cameras(db: AsyncSession) -> str:
     cams = result.scalars().all()
     if not cams:
         return "No cameras configured."
-    return "\n".join([f"- Name: {c.name}, ID: {c.id}, Status: {c.status}, ONVIF: {'Yes' if c.onvif_endpoint else 'No'}" for c in cams])
+    return "\n".join([f"- Name: {c.name}, ID: {c.id}, Location: {c.location or 'Unassigned'}, Status: {c.status}, ONVIF: {'Yes' if c.onvif_endpoint else 'No'}" for c in cams])
 
 async def run_update_camera(db: AsyncSession, camera_id: str, name: str = None, location: str = None, rtsp_url_main: str = None, rtsp_url_sub: str = None) -> str:
     result = await db.execute(select(Camera).where(Camera.id == camera_id))

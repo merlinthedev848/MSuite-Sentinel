@@ -5,6 +5,7 @@ from datetime import datetime
 
 class CameraBase(BaseModel):
     name: str
+    location: Optional[str] = None
     rtsp_url_main: Optional[str] = None
     rtsp_url_sub: Optional[str] = None
     onvif_endpoint: Optional[str] = None
@@ -24,6 +25,7 @@ class CameraCreate(CameraBase):
 
 class CameraUpdate(BaseModel):
     name: Optional[str] = None
+    location: Optional[str] = None
     rtsp_url_main: Optional[str] = None
     rtsp_url_sub: Optional[str] = None
     onvif_endpoint: Optional[str] = None

@@ -4,6 +4,9 @@ import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
 
 export default function App() {
   const [serverUrl, setServerUrl] = useState('');
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('admin');
+  const [authToken, setAuthToken] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -24,11 +27,28 @@ export default function App() {
     }
   };
 
-  const fetchDashboardData = async (url: string) => {
+  const loginToServer = async (url: string, user: string, pass: string): Promise<string | null> => {
     try {
+      const body = `username=${encodeURIComponent(user.trim() || 'admin')}&password=${encodeURIComponent(pass || 'admin')}`;
+      const res = await fetch(`${url}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.access_token || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const fetchDashboardData = async (url: string, token: string | null) => {
+    try {
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
       const [camsRes, eventsRes] = await Promise.all([
-        fetch(`${url}/cameras`),
-        fetch(`${url}/events?limit=5`)
+        fetch(`${url}/cameras`, { headers }),
+        fetch(`${url}/events?limit=5`, { headers })
       ]);
       if (camsRes.ok) setCameras(await camsRes.json());
       if (eventsRes.ok) setEvents(await eventsRes.json());
@@ -42,7 +62,7 @@ export default function App() {
     }
 
     // Format URL correctly
-    let formattedUrl = serverUrl.trim();
+    let formattedUrl = serverUrl.trim().replace(/\/+$/, '');
     if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
       formattedUrl = `http://${formattedUrl}`;
     }
@@ -52,9 +72,11 @@ export default function App() {
 
     try {
       const nextHealth = await fetchHealth(formattedUrl);
+      const token = await loginToServer(formattedUrl, username, password);
+      setAuthToken(token);
       setHealth(nextHealth);
       setBaseUrl(formattedUrl);
-      await fetchDashboardData(formattedUrl);
+      await fetchDashboardData(formattedUrl, token);
       setIsConnecting(false);
       setIsConnected(true);
     } catch (e) {
@@ -65,6 +87,7 @@ export default function App() {
 
   const handleDisconnect = () => {
     setIsConnected(false);
+    setAuthToken(null);
     setHealth(null);
     setCameras([]);
     setEvents([]);
@@ -77,14 +100,14 @@ export default function App() {
     const timer = setInterval(async () => {
       try {
         setHealth(await fetchHealth(baseUrl));
-        await fetchDashboardData(baseUrl);
+        await fetchDashboardData(baseUrl, authToken);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Lost connection to Sentinel server');
         setIsConnected(false);
       }
     }, 10000);
     return () => clearInterval(timer);
-  }, [isConnected, baseUrl]);
+  }, [isConnected, baseUrl, authToken]);
 
   // -------------------------------------------------------------
   // SCREEN: Server Setup
@@ -119,6 +142,33 @@ export default function App() {
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="url"
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>USERNAME</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="admin"
+                placeholderTextColor="rgba(255,255,255,0.3)"
+                value={username}
+                onChangeText={setUsername}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>PASSWORD</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="••••••••"
+                placeholderTextColor="rgba(255,255,255,0.3)"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
               />
             </View>
 

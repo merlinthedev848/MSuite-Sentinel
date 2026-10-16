@@ -774,7 +774,7 @@ const Playback: React.FC = () => {
                         
                         // Automatically trigger browser file download
                         const downloadLink = document.createElement('a');
-                        downloadLink.href = apiUrl(data.download_url);
+                        downloadLink.href = recordingSrc(data.download_url);
                         downloadLink.download = data.filename;
                         document.body.appendChild(downloadLink);
                         downloadLink.click();

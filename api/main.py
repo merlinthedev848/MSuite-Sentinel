@@ -211,14 +211,25 @@ async def auth_and_security_middleware(request: Request, call_next):
     if request.method == "PATCH" and _re.match(r'^/users/[^/]+/password$', path):
         required = None  # just needs a valid JWT — enforced inside the route handler
 
+    is_loopback = bool(
+        request.client
+        and request.client.host in ("127.0.0.1", "::1", "localhost")
+        and not request.headers.get("X-Forwarded-For")
+    )
     is_public = (
+        is_loopback or
         path.startswith("/system/health") or
         path.startswith("/auth/login") or
         path.startswith("/static/") or
         path.startswith("/assets/") or
         path in ("/docs", "/redoc", "/openapi.json")
     )
-    is_media_token_path = path.startswith("/recordings/") or path.startswith("/system/") or path.endswith("/snapshot")
+    is_media_token_path = (
+        path.startswith("/recordings/") or
+        path.startswith("/system/") or
+        path.endswith("/snapshot") or
+        path.endswith("/thumbnail")
+    )
 
     if required and not is_public:
         auth_header = request.headers.get("Authorization")
@@ -293,17 +304,6 @@ async def proxy_go2rtc(request: Request, path: str = ""):
         )
     except Exception as e:
         raise HTTPException(502, f"go2rtc proxy error: {e}")
-
-
-@app.get("/system/health")
-async def health():
-    dist = Path(__file__).parent.parent / "web" / "dist"
-    return {
-        "status": "healthy",
-        "version": settings.app_version,
-        "frontend_built": dist.exists() and (dist / "index.html").exists(),
-        "recording": recorder_manager.status(),
-    }
 
 
 # ── Serve recorded video files ─────────────────────────────────────

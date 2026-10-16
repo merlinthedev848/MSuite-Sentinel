@@ -12,7 +12,29 @@ export const apiBase = () => {
   return '';
 };
 
-export const apiUrl = (path: string) => joinUrl(apiBase(), path);
+const isMediaTokenPath = (path: string) => {
+  const cleanPath = path.split('?')[0];
+  return (
+    cleanPath.startsWith('/recordings/') ||
+    cleanPath.startsWith('/system/live') ||
+    cleanPath.endsWith('/snapshot') ||
+    cleanPath.endsWith('/thumbnail')
+  );
+};
+
+export const apiUrl = (path: string) => {
+  const url = joinUrl(apiBase(), path);
+  if (isMediaTokenPath(path) && !/[?&]token=/.test(url)) {
+    const token = localStorage.getItem('mview_token');
+    if (token) {
+      const separator = url.includes('?') ? '&' : '?';
+      return `${url}${separator}token=${encodeURIComponent(token)}`;
+    }
+  }
+  return url;
+};
+
+export const mediaUrl = (path: string) => apiUrl(path);
 
 export const go2rtcBase = () => {
   const override = localStorage.getItem('mview_go2rtc_base');
@@ -21,3 +43,4 @@ export const go2rtcBase = () => {
 };
 
 export const go2rtcUrl = (path: string) => joinUrl(go2rtcBase(), path);
+

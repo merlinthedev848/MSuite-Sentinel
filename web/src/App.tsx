@@ -98,14 +98,16 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
     const handleSnapshot = (event: MessageEvent) => {
       try {
         const message = JSON.parse(event.data);
-        if (message.type === 'ai_event') {
-          audioAlerts.playChime('threat');
-        }
         applySnapshot(message.payload);
       } catch {}
     };
 
+    const handleAiEvent = () => {
+      audioAlerts.playChime('threat');
+    };
+
     eventsSource.addEventListener('snapshot', handleSnapshot);
+    eventsSource.addEventListener('ai_event', handleAiEvent);
     eventsSource.onerror = () => {
       eventsSource.close();
       load();
@@ -113,6 +115,8 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
     };
 
     return () => {
+      eventsSource.removeEventListener('snapshot', handleSnapshot);
+      eventsSource.removeEventListener('ai_event', handleAiEvent);
       eventsSource.close();
       if (fallbackTimer) window.clearInterval(fallbackTimer);
     };
@@ -364,8 +368,42 @@ const AIOperatorDrawer: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
   );
 };
 
+class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; message: string }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error?.message || 'Unexpected UI error' };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="empty" style={{ height: '100%', padding: 32 }}>
+          <div className="empty-title">View Recovery Required</div>
+          <div className="empty-sub">{this.state.message}</div>
+          <button
+            className="btn btn-primary"
+            style={{ marginTop: 12 }}
+            onClick={() => {
+              this.setState({ hasError: false, message: '' });
+              window.location.reload();
+            }}
+          >
+            Reload View
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('mview_token'));
+  const [showAIDrawer, setShowAIDrawer] = useState(false);
 
   useEffect(() => {
     const handleStorage = () => {
@@ -394,31 +432,36 @@ function App() {
   if (window.location.pathname === '/wallboard') {
     return (
       <Router>
-        <Suspense fallback={<div className="empty">Loading...</div>}>
-          <Wallboard />
-        </Suspense>
+        <AppErrorBoundary>
+          <Suspense fallback={<div className="empty">Loading...</div>}>
+            <Wallboard />
+          </Suspense>
+        </AppErrorBoundary>
       </Router>
     );
   }
-
-  const [showAIDrawer, setShowAIDrawer] = useState(false);
 
   return (
     <Router>
       <div className="app-shell">
         <Sidebar onLogout={handleLogout} onToggleAI={() => setShowAIDrawer(!showAIDrawer)} showAIActive={showAIDrawer} />
         <div className="main-content">
-          <Suspense fallback={<div className="empty">Loading...</div>}>
-            <Routes>
-              <Route path="/"           element={<LiveView />}    />
-              <Route path="/dashboard"  element={<Dashboard />}   />
-              <Route path="/map"        element={<MapView />}     />
-              <Route path="/playback"   element={<Playback />}    />
-              <Route path="/events"     element={<Events />}      />
-              <Route path="/operations" element={<Operations />}  />
-              <Route path="/settings"   element={<Settings />}    />
-            </Routes>
-          </Suspense>
+          <AppErrorBoundary>
+            <Suspense fallback={<div className="empty">Loading...</div>}>
+              <Routes>
+                <Route path="/"           element={<LiveView />}    />
+                <Route path="/login"      element={<LiveView />}    />
+                <Route path="/dashboard"  element={<Dashboard />}   />
+                <Route path="/map"        element={<MapView />}     />
+                <Route path="/playback"   element={<Playback />}    />
+                <Route path="/events"     element={<Events />}      />
+                <Route path="/operations" element={<Operations />}  />
+                <Route path="/settings"   element={<Settings />}    />
+                <Route path="/wallboard"  element={<Wallboard />}   />
+                <Route path="*"           element={<LiveView />}    />
+              </Routes>
+            </Suspense>
+          </AppErrorBoundary>
         </div>
         <AIOperatorDrawer isOpen={showAIDrawer} onClose={() => setShowAIDrawer(false)} />
       </div>
@@ -427,3 +470,4 @@ function App() {
 }
 
 export default App;
+
