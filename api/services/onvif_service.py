@@ -260,6 +260,69 @@ class ONVIFService:
         else:
             return ONVIFCamera(parsed.hostname, port, username, password)
 
+    def get_presets(self, onvif_endpoint: str, username: str, password: str) -> list[dict]:
+        """Retrieve hardware presets directly from the physical camera."""
+        try:
+            cam = self._connect_from_endpoint(onvif_endpoint, username, password)
+            media = cam.create_media_service()
+            ptz = cam.create_ptz_service()
+            profile = media.GetProfiles()[0]
+            presets = ptz.GetPresets({"ProfileToken": profile.token})
+            result = []
+            for p in presets:
+                name = getattr(p, "Name", None) or getattr(p, "token", "Unnamed")
+                token = getattr(p, "token", str(name))
+                result.append({"name": str(name), "token": str(token)})
+            return result
+        except Exception as e:
+            logger.error(f"Failed to fetch ONVIF presets for {onvif_endpoint}: {e}")
+            return []
+
+    def set_preset(self, onvif_endpoint: str, username: str, password: str, preset_name: str) -> str | None:
+        """Save current camera position as a named preset on the device."""
+        try:
+            cam = self._connect_from_endpoint(onvif_endpoint, username, password)
+            media = cam.create_media_service()
+            ptz = cam.create_ptz_service()
+            profile = media.GetProfiles()[0]
+            request = ptz.create_type("SetPreset")
+            request.ProfileToken = profile.token
+            request.PresetName = preset_name
+            token = ptz.SetPreset(request)
+            logger.info(f"Preset '{preset_name}' saved on {onvif_endpoint} with token: {token}")
+            return str(token)
+        except Exception as e:
+            logger.error(f"Failed to set preset '{preset_name}' on {onvif_endpoint}: {e}")
+            return None
+
+    def goto_preset(self, onvif_endpoint: str, username: str, password: str, preset_identifier: str) -> bool:
+        """Drive PTZ motors to a saved preset by token or name."""
+        try:
+            cam = self._connect_from_endpoint(onvif_endpoint, username, password)
+            media = cam.create_media_service()
+            ptz = cam.create_ptz_service()
+            profile = media.GetProfiles()[0]
+
+            target_token = preset_identifier
+            try:
+                camera_presets = ptz.GetPresets({"ProfileToken": profile.token})
+                for p in camera_presets:
+                    if getattr(p, "Name", "") == preset_identifier:
+                        target_token = getattr(p, "token")
+                        break
+            except Exception:
+                pass
+
+            request = ptz.create_type("GotoPreset")
+            request.ProfileToken = profile.token
+            request.PresetToken = target_token
+            ptz.GotoPreset(request)
+            logger.info(f"Commanded camera to goto preset token: {target_token}")
+            return True
+        except Exception as e:
+            logger.error(f"Goto preset '{preset_identifier}' failed for {onvif_endpoint}: {e}")
+            return False
+
     @staticmethod
     def _ptz_velocity(action: str, speed: float) -> tuple[float, float, float]:
         speed = max(0.0, min(1.0, speed))
@@ -279,3 +342,4 @@ class ONVIFService:
 
 
 onvif_service = ONVIFService()
+

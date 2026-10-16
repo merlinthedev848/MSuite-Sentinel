@@ -136,14 +136,17 @@ async def lifespan(app: FastAPI):
     await recorder_manager.sync_cameras(cams)
     log.info(f"Recorder started for {len(cams)} camera(s).")
 
-    # Start retention and background workers
+    # Start retention, storage migration, and background workers
+    from api.services.storage_tier_migration import storage_migration_worker
     background_tasks = [
         asyncio.create_task(local_snapshot_worker(), name="local-core-snapshot"),
         asyncio.create_task(retention_worker(), name="retention-worker"),
+        asyncio.create_task(storage_migration_worker(), name="storage-migration-worker"),
         asyncio.create_task(auto_update_worker(), name="auto-update-worker"),
     ]
     from api.services.event_processor import process_mqtt_events
     background_tasks.append(asyncio.create_task(process_mqtt_events(), name="mqtt-event-processor"))
+
 
     try:
         yield
@@ -192,7 +195,10 @@ async def auth_and_security_middleware(request: Request, call_next):
         ("/system/live", {"live", "settings"}),
         ("/system", {"settings"}),
         ("/users", {"settings"}),
+        ("/agent", {"operations", "settings"}),
+        ("/automations", {"settings"}),
     ]
+
 
     required = None
     for prefix, permissions in path_permissions:
@@ -305,12 +311,29 @@ RECORDINGS_DIR = Path(settings.recordings_dir).resolve()
 
 
 @app.get("/recordings/{camera_id}/{filename}")
+@app.get("/recordings/{camera_id}/export/{filename}")
 async def serve_recording(camera_id: str, filename: str, request: Request):
-    fp = (RECORDINGS_DIR / camera_id / filename).resolve()
-    if RECORDINGS_DIR not in fp.parents:
-        raise HTTPException(400, "Invalid recording path")
-    if not fp.exists() or not fp.is_file():
+    hot_dir = Path(settings.recordings_dir).resolve()
+    cold_dir = Path(os.getenv("COLD_STORAGE_PATH", "/mnt/archive/mview/recordings")).resolve()
+    export_dir = (Path(settings.export_path) if hasattr(settings, "export_path") else Path(settings.storage_path) / "exports").resolve()
+
+    candidates = [
+        hot_dir / camera_id / filename,
+        cold_dir / camera_id / filename,
+        export_dir / filename,
+    ]
+
+    fp = None
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if any(base in resolved.parents for base in (hot_dir, cold_dir, export_dir)):
+            if resolved.exists() and resolved.is_file():
+                fp = resolved
+                break
+
+    if not fp:
         raise HTTPException(404, "Recording not found")
+
     file_size = fp.stat().st_size
     range_header = request.headers.get("range")
     if range_header:

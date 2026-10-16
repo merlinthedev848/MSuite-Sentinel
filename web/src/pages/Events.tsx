@@ -38,10 +38,17 @@ const Events: React.FC = () => {
       });
       if (res.ok) {
         setEvents(await res.json());
+      } else {
+        const err = await res.json().catch(() => ({}));
+        console.warn('Vector search returned error:', err);
       }
-    } catch {}
-    setSearching(false);
+    } catch (err) {
+      console.error('Vector search network error:', err);
+    } finally {
+      setSearching(false);
+    }
   };
+
 
   const typeColor = (cls: string) => {
     if (!cls) return 'var(--t3)';

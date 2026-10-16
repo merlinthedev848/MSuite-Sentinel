@@ -157,8 +157,35 @@ async def process_mqtt_events():
                                     snapshot_bytes = await capture_snapshot(camera_id)
                                     if not snapshot_bytes:
                                         logger.warning(f"[WATCHDOG Alert] Signal loss detected on camera {camera_id}")
+                                        try:
+                                            from api.models.operations import AlertRule
+                                            from api.services.notification_service import notification_service
+                                            watchdog_rules = (await session.execute(select(AlertRule).where(AlertRule.enabled == True))).scalars().all()
+                                            for wr in watchdog_rules:
+                                                cfg = wr.config or {}
+                                                if cfg.get("trigger_event") == "signal_loss" and (cfg.get("camera_id") in (None, camera_id)):
+                                                    event_info = {"camera_id": camera_id, "object_class": "SIGNAL_LOSS", "confidence": 1.0, "timestamp": event_timestamp.isoformat()}
+                                                    rule_payload = {"channels": ["webhook"] if cfg.get("webhook_url") else [], "webhook_url": cfg.get("webhook_url"), "mqtt_topic": cfg.get("mqtt_topic")}
+                                                    if cfg.get("mqtt_topic"): rule_payload["channels"].append("mqtt")
+                                                    asyncio.create_task(notification_service.dispatch(rule_payload, event_info))
+                                        except Exception as w_err:
+                                            logger.error(f"Failed to dispatch signal loss alert: {w_err}")
+
                                     elif len(snapshot_bytes) < 300:
                                         logger.warning(f"[WATCHDOG Alert] Camera tampering / lens obstruction detected on camera {camera_id}")
+                                        try:
+                                            from api.models.operations import AlertRule
+                                            from api.services.notification_service import notification_service
+                                            watchdog_rules = (await session.execute(select(AlertRule).where(AlertRule.enabled == True))).scalars().all()
+                                            for wr in watchdog_rules:
+                                                cfg = wr.config or {}
+                                                if cfg.get("trigger_event") == "camera_tampered" and (cfg.get("camera_id") in (None, camera_id)):
+                                                    event_info = {"camera_id": camera_id, "object_class": "TAMPERING", "confidence": 1.0, "timestamp": event_timestamp.isoformat()}
+                                                    rule_payload = {"channels": ["webhook"] if cfg.get("webhook_url") else [], "webhook_url": cfg.get("webhook_url"), "mqtt_topic": cfg.get("mqtt_topic")}
+                                                    if cfg.get("mqtt_topic"): rule_payload["channels"].append("mqtt")
+                                                    asyncio.create_task(notification_service.dispatch(rule_payload, event_info))
+                                        except Exception as w_err:
+                                            logger.error(f"Failed to dispatch tampering alert: {w_err}")
                                     
                                     if snapshot_bytes:
                                         from api.services.vlm_service import vlm_service
@@ -211,36 +238,75 @@ async def process_mqtt_events():
                                 ))
                                 saved_count += 1
                                 
-                                # Send push notifications dynamically if threat level is MEDIUM or HIGH
-                                if vlm_result and vlm_result.get("threat_level") in ("MEDIUM", "HIGH"):
-                                    try:
-                                        from api.services.notification_service import notification_service
-                                        event_data = {
-                                            "camera_id": camera_id,
-                                            "object_class": object_class,
-                                            "confidence": obj.get("confidence"),
-                                            "timestamp": event_timestamp.isoformat(),
-                                            "threat_level": vlm_result.get("threat_level")
-                                        }
+                                # Evaluate active database AlertRules and Automations
+                                try:
+                                    from api.models.operations import AlertRule
+                                    from api.services.notification_service import notification_service
+                                    active_rules = (await session.execute(select(AlertRule).where(AlertRule.enabled == True))).scalars().all()
+                                    raw_class = str(obj.get("class") or "").lower()
+                                    event_data = {
+                                        "event_id": event_id,
+                                        "camera_id": camera_id,
+                                        "object_class": object_class,
+                                        "confidence": obj.get("confidence"),
+                                        "timestamp": event_timestamp.isoformat(),
+                                        "threat_level": (vlm_result or {}).get("threat_level", "LOW")
+                                    }
+
+                                    for rule_record in active_rules:
+                                        rcfg = rule_record.config or {}
+                                        # Match automation rule or alert rule
+                                        trigger_evt = rcfg.get("trigger_event", "")
+                                        rule_objs = [str(o).lower() for o in rcfg.get("objects", [])]
+                                        cam_filter = rcfg.get("camera_id") or rcfg.get("camera_ids", [])
+                                        
+                                        cam_matches = True
+                                        if isinstance(cam_filter, list) and cam_filter:
+                                            cam_matches = camera_id in cam_filter
+                                        elif isinstance(cam_filter, str) and cam_filter:
+                                            cam_matches = (cam_filter == camera_id)
+
+                                        if not cam_matches:
+                                            continue
+
+                                        matches = False
+                                        if trigger_evt in ("person_detected", "motion") and raw_class in ("person", "car", "truck", "motorcycle"):
+                                            matches = True
+                                        elif raw_class in rule_objs or not rule_objs:
+                                            matches = True
+
+                                        if matches:
+                                            rule_channels = []
+                                            if rcfg.get("webhook_url"):
+                                                rule_channels.append("webhook")
+                                            if rcfg.get("mqtt_topic"):
+                                                rule_channels.append("mqtt")
+                                            dispatch_payload = {
+                                                "channels": rule_channels,
+                                                "webhook_url": rcfg.get("webhook_url"),
+                                                "mqtt_topic": rcfg.get("mqtt_topic"),
+                                            }
+                                            if rule_channels:
+                                                asyncio.create_task(notification_service.dispatch(dispatch_payload, event_data))
+
+                                    # Also check default environment channels for HIGH threat
+                                    if vlm_result and vlm_result.get("threat_level") in ("MEDIUM", "HIGH"):
                                         default_webhook = os.getenv("DEFAULT_DISCORD_WEBHOOK")
                                         default_bot_token = os.getenv("DEFAULT_TELEGRAM_BOT_TOKEN")
                                         default_chat_id = os.getenv("DEFAULT_TELEGRAM_CHAT_ID")
-                                        
-                                        rule = {
-                                            "channels": [],
-                                            "webhook_url": default_webhook,
-                                            "bot_token": default_bot_token,
-                                            "chat_id": default_chat_id
-                                        }
-                                        if default_webhook:
-                                            rule["channels"].append("discord")
-                                        if default_bot_token and default_chat_id:
-                                            rule["channels"].append("telegram")
-                                            
-                                        if rule["channels"]:
-                                            asyncio.create_task(notification_service.dispatch(rule, event_data))
-                                    except Exception as alert_err:
-                                        logger.error(f"Failed to dispatch smart alert: {alert_err}")
+                                        def_channels = []
+                                        if default_webhook: def_channels.append("discord")
+                                        if default_bot_token and default_chat_id: def_channels.append("telegram")
+                                        if def_channels:
+                                            asyncio.create_task(notification_service.dispatch({
+                                                "channels": def_channels,
+                                                "webhook_url": default_webhook,
+                                                "bot_token": default_bot_token,
+                                                "chat_id": default_chat_id
+                                            }, event_data))
+                                except Exception as alert_err:
+                                    logger.error(f"Failed to dispatch smart alert: {alert_err}")
+
                                     
                             await session.commit()
                             if saved_count:

@@ -765,15 +765,30 @@ const Playback: React.FC = () => {
                             end_time: new Date(timelineEnd).toISOString(),
                           })
                         });
-                        if (res.ok) {
-                          const data = await res.json();
-                          alert(`Incident Evidence Package Ready!\n\nPackage ID: ${data.export_id}\nSHA-256 Verification: ${data.sha256_hash}\n\n${data.message}`);
+                        if (!res.ok) {
+                          const err = await res.json().catch(() => ({}));
+                          alert(`Export Failed: ${err.detail || 'Unable to generate incident package'}`);
+                          return;
                         }
-                      } catch {}
+                        const data = await res.json();
+                        
+                        // Automatically trigger browser file download
+                        const downloadLink = document.createElement('a');
+                        downloadLink.href = apiUrl(data.download_url);
+                        downloadLink.download = data.filename;
+                        document.body.appendChild(downloadLink);
+                        downloadLink.click();
+                        document.body.removeChild(downloadLink);
+
+                        alert(`Incident Evidence Package Ready!\n\nPackage ID: ${data.export_id}\nSHA-256 Verification: ${data.sha256_hash}\nFile: ${data.filename}`);
+                      } catch (error) {
+                        alert(`Export Network Error: ${error instanceof Error ? error.message : 'Request failed'}`);
+                      }
                     }}
                   >
                     <Download size={12} /> Export Package
                   </button>
+
 
                   <button 
                     style={{ background: 'transparent', border: 'none', color: 'var(--t2)', cursor: 'pointer', padding: 4 }}

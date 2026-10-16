@@ -303,73 +303,76 @@ recorder_manager = RecorderManager()
 
 
 def list_recordings(camera_id: str | None = None) -> list[dict]:
-    """Return a list of recording files, optionally filtered by camera."""
+    """Return a list of recording files across both hot and cold tiers, optionally filtered by camera."""
     results = []
-    base = RECORDINGS_BASE
-    if not base.exists():
+    hot_base = RECORDINGS_BASE
+    cold_base = Path(os.getenv("COLD_STORAGE_PATH", "/mnt/archive/mview/recordings"))
+
+    bases = [b for b in (hot_base, cold_base) if b.exists()]
+    if not bases:
         return results
 
-    cam_dirs = [base / camera_id] if camera_id else [d for d in base.iterdir() if d.is_dir()]
-
+    now_utc = datetime.now(timezone.utc)
+    seen_filenames = set()
     max_results = 50000
-    for cam_dir in cam_dirs:
-        if not cam_dir.exists():
-            continue
-        try:
-            entries = [entry for entry in os.scandir(cam_dir) if entry.is_file() and entry.name.endswith(".mp4")]
-        except OSError:
-            continue
 
-        entries.sort(key=lambda x: x.name, reverse=True)
+    for base in bases:
+        cam_dirs = [base / camera_id] if camera_id else [d for d in base.iterdir() if d.is_dir()]
+        for cam_dir in cam_dirs:
+            if not cam_dir.exists():
+                continue
+            try:
+                entries = [entry for entry in os.scandir(cam_dir) if entry.is_file() and entry.name.endswith(".mp4")]
+            except OSError:
+                continue
 
-        for i, entry in enumerate(entries):
-            match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", entry.name)
+            entries.sort(key=lambda x: x.name, reverse=True)
 
-            if i < 5:
+            for i, entry in enumerate(entries):
+                unique_key = (cam_dir.name, entry.name)
+                if unique_key in seen_filenames:
+                    continue
+                seen_filenames.add(unique_key)
+
+                mtime = None
+                size_mb = 0.0
                 try:
                     stat = entry.stat()
-                    age_seconds = (datetime.now() - datetime.fromtimestamp(stat.st_mtime)).total_seconds()
-                    if stat.st_size == 0 or age_seconds < 12:
+                    file_mtime_utc = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    age_seconds = (now_utc - file_mtime_utc).total_seconds()
+                    # Skip zero-byte or currently writing segments under 5s
+                    if stat.st_size == 0 or (base == hot_base and i == 0 and age_seconds < 5):
                         continue
                     mtime = stat.st_mtime
-                    size_mb = round(stat.st_size / 1_048_576, 1)
+                    size_mb = round(stat.st_size / 1_048_576, 2)
                 except OSError:
                     continue
-            else:
-                mtime = None
-                size_mb = 10.0
 
-            if match:
-                y, m, d, hr, min, sec = match.groups()
-                try:
-                    dt = datetime(int(y), int(m), int(d), int(hr), int(min), int(sec))
-                    created_at = dt.isoformat()
-                except ValueError:
-                    if mtime is None:
-                        try:
-                            mtime = entry.stat().st_mtime
-                        except OSError:
-                            continue
-                    created_at = datetime.fromtimestamp(mtime).isoformat()
-            else:
-                if mtime is None:
+                match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", entry.name)
+                if match:
+                    y, m, d, hr, min, sec = match.groups()
                     try:
-                        mtime = entry.stat().st_mtime
-                    except OSError:
-                        continue
-                created_at = datetime.fromtimestamp(mtime).isoformat()
+                        dt = datetime(int(y), int(m), int(d), int(hr), int(min), int(sec), tzinfo=timezone.utc)
+                        created_at = dt.isoformat()
+                    except ValueError:
+                        created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat() if mtime else now_utc.isoformat()
+                else:
+                    created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat() if mtime else now_utc.isoformat()
 
-            results.append({
-                "camera_id": cam_dir.name,
-                "filename": entry.name,
-                "path": entry.path,
-                "size_mb": size_mb,
-                "created_at": created_at,
-                "url": f"/recordings/{cam_dir.name}/{entry.name}",
-            })
-            if len(results) >= max_results:
-                return results
+                results.append({
+                    "camera_id": cam_dir.name,
+                    "filename": entry.name,
+                    "path": entry.path,
+                    "size_mb": size_mb,
+                    "created_at": created_at,
+                    "url": f"/recordings/{cam_dir.name}/{entry.name}",
+                })
+                if len(results) >= max_results:
+                    return results
+
+    results.sort(key=lambda x: x["filename"], reverse=True)
     return results
+
 
 
 def storage_report() -> dict:

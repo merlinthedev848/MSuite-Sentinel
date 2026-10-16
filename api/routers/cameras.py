@@ -195,17 +195,64 @@ class PTZTourRequest(BaseModel):
     enabled: bool
     interval_seconds: int = 15
 
+_active_tours: dict[str, asyncio.Task] = {}
+
+
+async def _run_camera_tour(camera_id: str, interval: int):
+    while True:
+        try:
+            from api.database import async_session_maker
+            async with async_session_maker() as session:
+                cam = await session.get(Camera, camera_id)
+                if not cam or not (cam.config or {}).get("ptz", {}).get("tour_enabled"):
+                    break
+                presets = (cam.config or {}).get("ptz", {}).get("presets", [])
+                if not presets or not cam.onvif_endpoint:
+                    break
+
+            for preset in presets:
+                preset_name = preset if isinstance(preset, str) else preset.get("name")
+                if preset_name and cam.onvif_endpoint:
+                    await asyncio.to_thread(
+                        onvif_service.goto_preset,
+                        cam.onvif_endpoint,
+                        cam.onvif_username or "",
+                        cam.onvif_password or "",
+                        preset_name,
+                    )
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(interval)
+
+
 @router.get("/{camera_id}/ptz/presets")
 async def get_ptz_presets(camera_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam:
         raise HTTPException(404, "Camera not found")
-    
+
     config = cam.config or {}
     ptz_config = config.get("ptz", {})
-    presets = ptz_config.get("presets", ["Home Gate", "Driveway", "Front Yard"])
+    presets = list(ptz_config.get("presets", ["Home Gate", "Driveway", "Front Yard"]))
+
+    # Synchronize with hardware presets if onvif is connected
+    if cam.onvif_endpoint:
+        hw_presets = await asyncio.to_thread(
+            onvif_service.get_presets,
+            cam.onvif_endpoint,
+            cam.onvif_username or "",
+            cam.onvif_password or "",
+        )
+        for hw in hw_presets:
+            hw_name = hw.get("name")
+            if hw_name and hw_name not in presets:
+                presets.append(hw_name)
+
     return {"presets": presets}
+
 
 @router.post("/{camera_id}/ptz/presets")
 async def save_ptz_preset(camera_id: str, req: PTZPresetRequest, db: AsyncSession = Depends(get_db)):
@@ -214,16 +261,31 @@ async def save_ptz_preset(camera_id: str, req: PTZPresetRequest, db: AsyncSessio
     if not cam:
         raise HTTPException(404, "Camera not found")
 
+    preset_name = req.name.strip()
+    if not preset_name:
+        raise HTTPException(400, "Preset name cannot be empty")
+
+    token = None
+    if cam.onvif_endpoint:
+        token = await asyncio.to_thread(
+            onvif_service.set_preset,
+            cam.onvif_endpoint,
+            cam.onvif_username or "",
+            cam.onvif_password or "",
+            preset_name,
+        )
+
     config = dict(cam.config or {})
     ptz_config = dict(config.get("ptz", {}))
     presets = list(ptz_config.get("presets", ["Home Gate", "Driveway", "Front Yard"]))
-    if req.name.strip() and req.name.strip() not in presets:
-        presets.append(req.name.strip())
+    if preset_name not in presets:
+        presets.append(preset_name)
     ptz_config["presets"] = presets
     config["ptz"] = ptz_config
     cam.config = config
     await db.commit()
-    return {"status": "success", "presets": presets}
+    return {"status": "success", "presets": presets, "token": token}
+
 
 @router.post("/{camera_id}/ptz/goto")
 async def goto_ptz_preset(camera_id: str, req: PTZPresetRequest, db: AsyncSession = Depends(get_db)):
@@ -231,7 +293,26 @@ async def goto_ptz_preset(camera_id: str, req: PTZPresetRequest, db: AsyncSessio
     cam = result.scalar_one_or_none()
     if not cam:
         raise HTTPException(404, "Camera not found")
-    return {"status": "moved", "target": req.name}
+
+    preset_name = req.name.strip()
+    if not preset_name:
+        raise HTTPException(400, "Preset target cannot be empty")
+
+    if not cam.onvif_endpoint:
+        raise HTTPException(400, "Camera has no ONVIF endpoint configured")
+
+    ok = await asyncio.to_thread(
+        onvif_service.goto_preset,
+        cam.onvif_endpoint,
+        cam.onvif_username or "",
+        cam.onvif_password or "",
+        preset_name,
+    )
+    if not ok:
+        raise HTTPException(502, f"Failed to drive camera to preset '{preset_name}'")
+
+    return {"status": "moved", "target": preset_name}
+
 
 @router.post("/{camera_id}/ptz/tour")
 async def toggle_ptz_tour(camera_id: str, req: PTZTourRequest, db: AsyncSession = Depends(get_db)):
@@ -247,7 +328,21 @@ async def toggle_ptz_tour(camera_id: str, req: PTZTourRequest, db: AsyncSession 
     config["ptz"] = ptz_config
     cam.config = config
     await db.commit()
+
+    if req.enabled:
+        if camera_id in _active_tours:
+            _active_tours[camera_id].cancel()
+        _active_tours[camera_id] = asyncio.create_task(
+            _run_camera_tour(camera_id, req.interval_seconds),
+            name=f"ptz-tour-{camera_id}"
+        )
+    else:
+        if camera_id in _active_tours:
+            _active_tours[camera_id].cancel()
+            _active_tours.pop(camera_id, None)
+
     return {"status": "tour_updated", "enabled": req.enabled, "interval": req.interval_seconds}
+
 
 
 
