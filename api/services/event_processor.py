@@ -108,9 +108,11 @@ async def process_mqtt_events():
     """
     logger.info(f"Connecting to MQTT Broker at {MQTT_BROKER}:{MQTT_PORT} to subscribe to events...")
     
+    mqtt_backoff = 2
     while True:
         try:
-            async with MQTTClient(MQTT_BROKER, port=MQTT_PORT) as client:
+            async with MQTTClient(MQTT_BROKER, port=MQTT_PORT, keepalive=30) as client:
+                mqtt_backoff = 2
                 await client.subscribe("sentinel/events/#")
                 logger.info("Subscribed to sentinel/events/#")
                 
@@ -219,6 +221,10 @@ async def process_mqtt_events():
                                 if event_time - last_seen < cooldown:
                                     continue
                                 _LAST_ZONE_EVENTS[cooldown_key] = event_time
+                                if len(_LAST_ZONE_EVENTS) > 2000:
+                                    cutoff_ts = event_time - 3600
+                                    for k in [k for k, ts in _LAST_ZONE_EVENTS.items() if ts < cutoff_ts]:
+                                        _LAST_ZONE_EVENTS.pop(k, None)
 
                                 event_id = str(uuid.uuid4())
                                 thumb_path = None
@@ -327,8 +333,9 @@ async def process_mqtt_events():
             logger.info("MQTT event processor cancelled.")
             raise
         except Exception as e:
-            logger.error(f"MQTT connection lost: {e}. Reconnecting in 5 seconds...")
-            await asyncio.sleep(5)
+            logger.error(f"MQTT connection lost: {e}. Reconnecting in {mqtt_backoff} seconds...")
+            await asyncio.sleep(mqtt_backoff)
+            mqtt_backoff = min(mqtt_backoff * 2, 60)
 
 
 if __name__ == "__main__":

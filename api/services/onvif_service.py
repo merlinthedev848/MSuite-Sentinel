@@ -114,12 +114,12 @@ async def discover_cameras(timeout: int = 5) -> list[dict]:
 
     # ── Method 1: WS-Discovery ───────────────────────────────────
     logger.info("Starting ONVIF WS-Discovery scan…")
+    wsd = None
     try:
         wsd = ThreadedWSDiscovery()
         wsd.start()
         await asyncio.sleep(timeout)
         services = wsd.searchServices()
-        wsd.stop()
 
         for service in services:
             try:
@@ -154,6 +154,12 @@ async def discover_cameras(timeout: int = 5) -> list[dict]:
         logger.info(f"WS-Discovery found {len(discovered)} device(s).")
     except Exception as e:
         logger.warning(f"WS-Discovery failed: {e}. Falling back to IP scan.")
+    finally:
+        if wsd is not None:
+            try:
+                wsd.stop()
+            except Exception:
+                pass
 
     # ── Method 2: IP Range Scan (fallback if WS-Discovery found nothing) ──
     if not discovered:

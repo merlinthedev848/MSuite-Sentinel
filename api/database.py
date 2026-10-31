@@ -13,6 +13,11 @@ if DATABASE_URL.startswith("postgresql"):
     engine_kwargs.update(
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
+        pool_recycle=1800,
+    )
+elif DATABASE_URL.startswith("sqlite"):
+    engine_kwargs.update(
+        connect_args={"timeout": 30},
     )
 
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
@@ -21,7 +26,12 @@ if DATABASE_URL.startswith("sqlite"):
     @event.listens_for(engine.sync_engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.execute("PRAGMA cache_size=-64000")
         cursor.close()
 
 async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -39,4 +49,3 @@ async def init_vector_db(target_engine):
 async def get_db():
     async with async_session_maker() as session:
         yield session
-
