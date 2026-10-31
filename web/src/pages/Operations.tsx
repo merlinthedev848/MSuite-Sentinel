@@ -195,6 +195,14 @@ const Operations: React.FC = () => {
     }
   };
 
+  const cameraNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of cameras) {
+      map[c.id] = c.name;
+    }
+    return map;
+  }, [cameras]);
+
   const cameraOptions = useMemo(() => cameras.map(camera => (
     <option key={camera.id} value={camera.id}>{camera.name}</option>
   )), [cameras]);
@@ -405,15 +413,38 @@ const Operations: React.FC = () => {
               </div>
               {events.length === 0 ? <div className="empty"><Shield size={22} /><div className="empty-title">No events to review</div></div> : events.map(event => {
                 const review = reviews[event.id] || event.review;
+                const camName = event.camera_id ? (cameraNameById[event.camera_id] || `Camera ${event.camera_id.slice(0, 8)}`) : 'Unknown Camera';
+                const formattedTime = event.timestamp ? new Date(event.timestamp).toLocaleString() : 'No timestamp';
                 return (
                   <div className="cam-row" key={event.id}>
-                    <Shield size={15} color={review?.verdict === 'false_positive' ? 'var(--amber)' : 'var(--cyan)'} />
+                    <div style={{ width: 42, height: 30, borderRadius: 6, overflow: 'hidden', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, position: 'relative' }}>
+                      <Shield size={14} color={review?.verdict === 'false_positive' ? 'var(--amber)' : 'var(--cyan)'} />
+                      {event.id && (
+                        <img
+                          src={apiUrl(`/events/${event.id}/thumbnail`)}
+                          alt=""
+                          onError={e => { e.currentTarget.style.display = 'none'; }}
+                          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      )}
+                    </div>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700 }}>{event.object_class || 'event'} <span style={{ color: 'var(--t3)', fontWeight: 500 }}>{event.confidence ? `${Math.round(event.confidence * 100)}%` : ''}</span></div>
-                      <div style={{ color: 'var(--t3)', fontSize: '0.72rem' }}>{event.timestamp || 'No timestamp'} - {review?.verdict || 'unreviewed'}</div>
+                      <div style={{ fontWeight: 700, textTransform: 'capitalize' }}>
+                        {event.object_class || 'event'}{' '}
+                        <span style={{ color: 'var(--cyan)', fontWeight: 600, fontSize: '0.75rem' }}>{event.confidence ? `${Math.round(event.confidence * 100)}%` : ''}</span>
+                        <span style={{ color: 'var(--t2)', fontWeight: 500, fontSize: '0.75rem', marginLeft: 8 }}>· {camName}</span>
+                      </div>
+                      <div style={{ color: 'var(--t3)', fontSize: '0.72rem' }}>{formattedTime} — <span style={{ color: review?.verdict ? 'var(--cyan)' : 'var(--t3)', fontWeight: 600 }}>{(review?.verdict || 'unreviewed').replace('_', ' ')}</span></div>
                     </div>
                     {['useful', 'false_positive', 'evidence', 'training'].map(verdict => (
-                      <button key={verdict} className="btn btn-ghost" style={{ padding: '6px 9px' }} onClick={() => reviewEvent(event.id, verdict)}>{verdict.replace('_', ' ')}</button>
+                      <button
+                        key={verdict}
+                        className={`btn ${review?.verdict === verdict ? 'btn-primary' : 'btn-ghost'}`}
+                        style={{ padding: '6px 9px', textTransform: 'capitalize' }}
+                        onClick={() => reviewEvent(event.id, verdict)}
+                      >
+                        {verdict.replace('_', ' ')}
+                      </button>
                     ))}
                   </div>
                 );

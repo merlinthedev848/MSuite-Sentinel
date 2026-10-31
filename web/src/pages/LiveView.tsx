@@ -76,14 +76,14 @@ const inputTime = (date: Date) => {
   return `${h}:${m}`;
 };
 
-const CameraFeedComponent: React.FC<{
+const CameraFeedComponent = React.memo<{
   cam: Camera;
   iceServers: RTCIceServer[];
   analytics?: boolean;
   maximized?: boolean;
   paused?: boolean;
   onMaximize?: () => void;
-}> = ({ cam, iceServers, analytics = false, maximized = false, paused = false, onMaximize }) => {
+}>(({ cam, iceServers, analytics = false, maximized = false, paused = false, onMaximize }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [useMjpegFallback, setUseMjpegFallback] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -544,7 +544,7 @@ const CameraFeedComponent: React.FC<{
       </div>
     </div>
   );
-};
+});
 
 const DigitalClock = () => {
   const [now, setNow] = useState(new Date());

@@ -7,6 +7,7 @@ webrtc:
 
 rtsp:
   listen: ":8554"
+  default_query: "transport=tcp"
 
 # This file will be automatically populated with streams from the PostgreSQL database 
 # when cameras are adopted via the mView Sentinel API.

@@ -99,6 +99,14 @@ export const Dashboard = () => {
     return () => window.clearInterval(interval);
   }, []);
 
+  const cameraNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of cameras) {
+      map[c.id] = c.name;
+    }
+    return map;
+  }, [cameras]);
+
   const chartData = useMemo(() => {
     if (analytics?.hourly && Array.isArray(analytics.hourly) && analytics.hourly.some(h => (h.count || 0) > 0)) {
       return analytics.hourly.map(h => ({ name: h.hour || '--', count: Number(h.count) || 0 }));
@@ -264,7 +272,7 @@ export const Dashboard = () => {
                           </span>
                         </div>
                         <div style={{ color: 'var(--t3)', fontSize: '0.7rem', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          Camera {event.camera_id}
+                          {cameraNameById[event.camera_id] || `Camera ${event.camera_id.slice(0, 8)}`}
                         </div>
                       </div>
                       <span style={{ color: 'var(--cyan)', fontSize: '0.72rem', fontWeight: 800 }}>

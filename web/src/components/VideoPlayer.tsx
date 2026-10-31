@@ -43,6 +43,9 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
 
     let pc: RTCPeerConnection | null = null;
     let rtcTimeout: number | undefined;
+    let disconnectTimer: number | undefined;
+    setIsStreaming(false);
+    setUseMjpegFallback(false);
 
     const fallbackToHls = () => {
       setUseMjpegFallback(true);
@@ -72,10 +75,20 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
       if (pc) {
         if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
           window.clearTimeout(rtcTimeout);
+          window.clearTimeout(disconnectTimer);
           videoRef.current?.play().catch(e => console.log("Play on connection success error:", e));
         }
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-          console.warn("WebRTC connection failed/disconnected. Falling back to MJPEG...");
+        if (pc.iceConnectionState === 'disconnected') {
+          window.clearTimeout(disconnectTimer);
+          disconnectTimer = window.setTimeout(() => {
+            if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+              console.warn("WebRTC stayed disconnected; renegotiating...");
+              setRetryNonce(n => n + 1);
+            }
+          }, 4000);
+        }
+        if (pc.iceConnectionState === 'failed') {
+          console.warn("WebRTC connection failed. Falling back to MJPEG...");
           fallbackToHls();
         }
       }
@@ -130,6 +143,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
     return () => {
       setIsStreaming(false);
       window.clearTimeout(rtcTimeout);
+      window.clearTimeout(disconnectTimer);
       if (pc) {
         pc.close();
       }
@@ -514,4 +528,4 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
   );
 };
 
-export default VideoPlayer;
+export default React.memo(VideoPlayer);
