@@ -213,6 +213,9 @@ async def _terminate_process(proc: "asyncio.subprocess.Process", grace: float = 
 
 async def register_go2rtc_stream(name: str, rtsp_url: str):
     url = settings.go2rtc_url.rstrip('/')
+    if rtsp_url.lower().startswith("rtsp://") and "transport=" not in rtsp_url and "#" not in rtsp_url:
+        sep = "&" if "?" in rtsp_url else "?"
+        rtsp_url = f"{rtsp_url}{sep}transport=tcp"
     for attempt in range(1, 6):
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
