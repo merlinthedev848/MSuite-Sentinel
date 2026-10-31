@@ -335,6 +335,9 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
         raise HTTPException(404, "Recording not found")
 
     file_size = fp.stat().st_size
+    from api.services.recorder import is_finalized_mp4
+    if file_size < 10240 or not is_finalized_mp4(fp, file_size):
+        raise HTTPException(409, "Recording segment is unfinalized or in-progress")
     range_header = request.headers.get("range")
     if range_header:
         start = 0

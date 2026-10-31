@@ -302,6 +302,34 @@ class RecorderManager:
 recorder_manager = RecorderManager()
 
 
+def is_finalized_mp4(file_path: str | Path, stat_size: int | None = None) -> bool:
+    """
+    Check if an MP4 file has been finalized with a valid moov atom.
+    In-progress ffmpeg segments and aborted/corrupted recordings lack a moov atom
+    and cannot be decoded or played by web browsers.
+    """
+    try:
+        p = Path(file_path)
+        size = stat_size if stat_size is not None else p.stat().st_size
+        if size < 10240:
+            return False
+        with open(p, "rb") as f:
+            # Faststart files place moov right after ftyp (within first 64KB)
+            header = f.read(min(size, 65536))
+            if b"moov" in header:
+                return True
+            # Standard MP4 files place moov at the end of the file
+            if size > 65536:
+                check_tail = min(size, 262144)
+                f.seek(size - check_tail)
+                tail = f.read(check_tail)
+                if b"moov" in tail:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def list_recordings(camera_id: str | None = None) -> list[dict]:
     """Return a list of recording files across both hot and cold tiers, optionally filtered by camera."""
     results = []
@@ -338,10 +366,15 @@ def list_recordings(camera_id: str | None = None) -> list[dict]:
                 size_mb = 0.0
                 try:
                     stat = entry.stat()
+                    if stat.st_size < 10240:
+                        continue
                     file_mtime_utc = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
                     age_seconds = (now_utc - file_mtime_utc).total_seconds()
-                    # Skip zero-byte or currently writing segments under 5s
-                    if stat.st_size == 0 or (base == hot_base and i == 0 and age_seconds < 5):
+                    # Skip unfinalized or actively writing segments
+                    if base == hot_base and (i == 0 or age_seconds < SEGMENT_DURATION + 10):
+                        if not is_finalized_mp4(entry.path, stat.st_size):
+                            continue
+                    elif not is_finalized_mp4(entry.path, stat.st_size):
                         continue
                     mtime = stat.st_mtime
                     size_mb = round(stat.st_size / 1_048_576, 2)

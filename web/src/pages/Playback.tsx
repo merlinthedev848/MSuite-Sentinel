@@ -106,6 +106,18 @@ const Playback: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const pendingSeek = useRef<number | null>(null);
+  const failedSegmentsRef = useRef<Set<string>>(new Set());
+  const errorTimeoutRef = useRef<number | null>(null);
+
+  const showVideoMessage = (msg: string, durationMs: number = 4000) => {
+    setVideoError(msg);
+    if (errorTimeoutRef.current) window.clearTimeout(errorTimeoutRef.current);
+    if (durationMs > 0) {
+      errorTimeoutRef.current = window.setTimeout(() => {
+        setVideoError('');
+      }, durationMs);
+    }
+  };
 
   const speeds = [0.5, 1, 2, 4, 8, 16];
 
@@ -139,6 +151,9 @@ const Playback: React.FC = () => {
   // ── 2. Load recordings and events for selected camera ──────────────
   useEffect(() => {
     if (!selectedCam) return;
+    failedSegmentsRef.current.clear();
+    setVideoError('');
+    if (errorTimeoutRef.current) window.clearTimeout(errorTimeoutRef.current);
     let isMounted = true;
 
     const loadData = async () => {
@@ -152,20 +167,24 @@ const Playback: React.FC = () => {
         if (recRes.ok) {
           const rawRecs = await recRes.json();
           recs = rawRecs.map((r: any) => {
-            const match = r.filename.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
             let start = 0;
-            if (match) {
-              const [_, y, m, d, hr, min, sec] = match;
-              start = new Date(parseInt(y), parseInt(m) - 1, parseInt(d), parseInt(hr), parseInt(min), parseInt(sec)).getTime();
-            } else {
-              start = new Date(r.created_at).getTime();
+            if (r.created_at) {
+              const dt = new Date(r.created_at).getTime();
+              if (!isNaN(dt)) start = dt;
+            }
+            if (!start) {
+              const match = r.filename.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
+              if (match) {
+                const [_, y, m, d, hr, min, sec] = match;
+                start = Date.UTC(parseInt(y), parseInt(m) - 1, parseInt(d), parseInt(hr), parseInt(min), parseInt(sec));
+              }
             }
             return {
               ...r,
               startTimestamp: start,
               endTimestamp: start + 60000
             };
-          });
+          }).filter((r: any) => r.startTimestamp > 0);
 
           // Sort by startTimestamp ascending
           recs.sort((a, b) => a.startTimestamp - b.startTimestamp);
@@ -241,16 +260,17 @@ const Playback: React.FC = () => {
   const seekToTime = (targetTimeMs: number, findNearest: boolean = false) => {
     if (recordings.length === 0) return false;
 
-    // 1. Try to find the exact segment
-    let file = recordings.find(r => targetTimeMs >= r.startTimestamp && targetTimeMs <= r.endTimestamp);
+    // 1. Try to find the exact segment (excluding known failed segments)
+    let file = recordings.find(r => !failedSegmentsRef.current.has(r.url) && targetTimeMs >= r.startTimestamp && targetTimeMs <= r.endTimestamp);
     let seekTargetMs = targetTimeMs;
 
     // 2. Fallback to nearest segment if findNearest is true
     if (!file && findNearest) {
       let minDiff = Infinity;
-      let closestFile = null;
+      let closestFile: RecordingFile | null = null;
 
       for (const r of recordings) {
+        if (failedSegmentsRef.current.has(r.url)) continue;
         const diffStart = Math.abs(r.startTimestamp - targetTimeMs);
         const diffEnd = Math.abs(r.endTimestamp - targetTimeMs);
         const minLocalDiff = Math.min(diffStart, diffEnd);
@@ -340,7 +360,12 @@ const Playback: React.FC = () => {
       pendingSeek.current = null;
     }
     if (isPlaying && videoRef.current) {
-      videoRef.current.play().catch(() => {});
+      videoRef.current.play().catch(err => {
+        if (err.name === 'NotAllowedError' && videoRef.current) {
+          videoRef.current.muted = true;
+          videoRef.current.play().catch(() => {});
+        }
+      });
     }
   };
 
@@ -348,48 +373,93 @@ const Playback: React.FC = () => {
     if (!activeFile) return;
     const currentIndex = recordings.findIndex(r => r.url === activeFile.url);
     if (currentIndex !== -1 && currentIndex < recordings.length - 1) {
-      const nextFile = recordings[currentIndex + 1];
-      setActiveFile(nextFile);
-      setCurrentTimeMs(nextFile.startTimestamp);
-      pendingSeek.current = 0;
-    } else {
-      setIsPlaying(false);
+      let nextFile: RecordingFile | null = null;
+      for (let i = currentIndex + 1; i < recordings.length; i++) {
+        if (!failedSegmentsRef.current.has(recordings[i].url)) {
+          nextFile = recordings[i];
+          break;
+        }
+      }
+      if (nextFile) {
+        setActiveFile(nextFile);
+        setCurrentTimeMs(nextFile.startTimestamp);
+        pendingSeek.current = 0;
+        setIsPlaying(true);
+        return;
+      }
     }
+    setIsPlaying(false);
   };
 
   const handleRecordingError = () => {
     setBuffering(false);
+    const mediaError = videoRef.current?.error;
+    // MEDIA_ERR_ABORTED (code 1): Normal abort when changing video source or seeking. Do not skip!
+    if (mediaError && mediaError.code === 1) {
+      return;
+    }
+
     if (activeFile) {
+      failedSegmentsRef.current.add(activeFile.url);
       const currentIndex = recordings.findIndex(r => r.url === activeFile.url);
-      if (currentIndex > 0) {
-        const previousFile = recordings[currentIndex - 1];
-        setActiveFile(previousFile);
-        setCurrentTimeMs(previousFile.startTimestamp);
+
+      // Look for the closest valid un-failed segment (backwards first, then forwards)
+      let fallbackFile: RecordingFile | null = null;
+      for (let i = currentIndex - 1; i >= 0; i--) {
+        if (!failedSegmentsRef.current.has(recordings[i].url)) {
+          fallbackFile = recordings[i];
+          break;
+        }
+      }
+      if (!fallbackFile) {
+        for (let i = currentIndex + 1; i < recordings.length; i++) {
+          if (!failedSegmentsRef.current.has(recordings[i].url)) {
+            fallbackFile = recordings[i];
+            break;
+          }
+        }
+      }
+
+      if (fallbackFile) {
+        setActiveFile(fallbackFile);
+        setCurrentTimeMs(fallbackFile.startTimestamp);
         pendingSeek.current = 0;
-        setVideoError('Skipped an unfinished recording segment.');
+        setIsPlaying(true);
+        showVideoMessage('Skipped an unfinished recording segment.');
         return;
       }
     }
-    setVideoError('Failed to load recording file. The segment may still be finalizing.');
+    showVideoMessage('Failed to load recording file. The segment may still be finalizing.', 6000);
   };
 
   // ── 4. Transport Control Handlers ──────────────────────────────────
   useEffect(() => {
     if (!buffering || !activeFile) return;
     const timer = window.setTimeout(() => {
-      if (videoRef.current && videoRef.current.readyState < 2) {
+      if (videoRef.current && (videoRef.current.error || videoRef.current.readyState === 0)) {
         handleRecordingError();
+      } else {
+        setBuffering(false);
       }
-    }, 10000);
+    }, 12000);
     return () => window.clearTimeout(timer);
   }, [buffering, activeFile?.url]);
 
   const handlePlayPause = () => {
     if (!videoRef.current) return;
+    setVideoError('');
     if (videoRef.current.paused) {
-      videoRef.current.play().catch(() => {});
+      videoRef.current.muted = false;
+      videoRef.current.play().catch(() => {
+        if (videoRef.current) {
+          videoRef.current.muted = true;
+          videoRef.current.play().catch(() => {});
+        }
+      });
+      setIsPlaying(true);
     } else {
       videoRef.current.pause();
+      setIsPlaying(false);
     }
   };
 
@@ -696,11 +766,16 @@ const Playback: React.FC = () => {
                 key={activeFile.url}
                 src={recordingSrc(activeFile.url)}
                 autoPlay
+                playsInline
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
                 onEnded={handleVideoEnded}
                 onWaiting={() => setBuffering(true)}
-                onPlaying={() => { setBuffering(false); setIsPlaying(true); }}
+                onPlaying={() => {
+                  setBuffering(false);
+                  setIsPlaying(true);
+                  setVideoError('');
+                }}
                 onCanPlay={() => setBuffering(false)}
                 onError={handleRecordingError}
                 onPlay={() => setIsPlaying(true)}

@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 from api.config import settings
-from api.services.recorder import list_recordings
+from api.services.recorder import list_recordings, is_finalized_mp4
 
 router = APIRouter(prefix="/recordings-list", tags=["Recordings"])
 
@@ -69,6 +69,12 @@ async def export_evidence(req: ExportRequest):
     for directory in (hot_dir, cold_dir):
         if directory.exists():
             for p in directory.glob("*.mp4"):
+                try:
+                    stat = p.stat()
+                    if stat.st_size < 10240 or not is_finalized_mp4(p, stat.st_size):
+                        continue
+                except OSError:
+                    continue
                 match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", p.name)
                 if match:
                     y, mo, d, h, mi, s = map(int, match.groups())
