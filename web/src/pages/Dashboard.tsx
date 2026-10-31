@@ -36,12 +36,6 @@ const sectionHeaderStyle: React.CSSProperties = {
   borderBottom: '1px solid var(--border)',
 };
 
-const formatStorage = (gb?: number) => {
-  if (!gb || gb <= 0) return '0 GB';
-  if (gb >= 1024) return `${(gb / 1024).toFixed(2)} TB`;
-  return `${gb.toFixed(1)} GB`;
-};
-
 export const Dashboard = () => {
   const [cameras, setCameras] = useState<DashboardCamera[]>([]);
   const [events, setEvents] = useState<DashboardEvent[]>([]);

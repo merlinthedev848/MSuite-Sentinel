@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Trash2, Edit2, Wifi, WifiOff, CheckCircle, XCircle, X, Loader, ChevronDown, ChevronRight, ShieldCheck, KeyRound, Activity, Database } from 'lucide-react';
+import { Search, Plus, Trash2, Edit2, CheckCircle, X, Loader, ShieldCheck, KeyRound, Activity, Database } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
 
 interface Camera {
@@ -871,9 +871,6 @@ const Settings: React.FC = () => {
     { id: 'users', label: 'Users & Security' },
   ];
   const cameraNameById = Object.fromEntries(cameras.map(cam => [cam.id, cam.name]));
-  const estimatedDaysRemaining = storageReport?.estimated_gb_per_day && systemHealth?.storage?.free_gb
-    ? Math.floor(systemHealth.storage.free_gb / storageReport.estimated_gb_per_day)
-    : null;
 
   return (
     <div className="settings-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>

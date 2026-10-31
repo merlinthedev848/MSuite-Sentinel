@@ -104,6 +104,10 @@ async def lifespan(app: FastAPI):
         if engine.url.get_backend_name().startswith("postgresql"):
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text(
+            'CREATE INDEX IF NOT EXISTS ix_semantic_events_camera_ts '
+            'ON semantic_events (camera_id, "timestamp" DESC)'
+        ))
 
     # Seed a default admin user the first time the database starts.
     from api.database import async_session_maker as AsyncSessionLocal
@@ -193,6 +197,7 @@ async def auth_and_security_middleware(request: Request, call_next):
         ("/events", {"events"}),
         ("/maps", {"live", "settings"}),
         ("/ops-api", {"operations", "settings"}),
+        ("/go2rtc", {"live", "settings"}),
         ("/system/live", {"live", "settings"}),
         ("/system", {"settings"}),
         ("/users", {"settings"}),
@@ -227,6 +232,7 @@ async def auth_and_security_middleware(request: Request, call_next):
     )
     is_media_token_path = (
         path.startswith("/recordings/") or
+        path.startswith("/go2rtc/") or
         path.startswith("/system/") or
         path.endswith("/snapshot") or
         path.endswith("/thumbnail")
@@ -279,12 +285,28 @@ async def proxy_go2rtc(request: Request, path: str = ""):
     """Proxy go2rtc API & WebRTC signaling directly through the main API port using pooled HTTP client."""
     target_base = settings.go2rtc_url.rstrip("/")
     subpath = path if path.startswith("api/") or not path else f"api/{path}"
+
+    # The go2rtc admin API can register exec:/ffmpeg: sources (host command execution),
+    # so only expose the read/stream endpoints the UI needs, never stream management.
+    allowed_prefixes = ("api/webrtc", "api/stream.", "api/frame.", "api/hls")
+    if ".." in subpath or "//" in subpath or not subpath.startswith(allowed_prefixes):
+        raise HTTPException(403, "go2rtc endpoint not permitted")
+    if request.method not in ("GET", "POST", "OPTIONS"):
+        raise HTTPException(405, "Method not allowed")
+    if request.method == "POST" and not subpath.startswith("api/webrtc"):
+        raise HTTPException(405, "Method not allowed")
+
     target_url = f"{target_base}/{subpath}"
-    if request.url.query:
-        target_url = f"{target_url}?{request.url.query}"
+    forwarded_query = [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
+    if forwarded_query:
+        from urllib.parse import urlencode
+        target_url = f"{target_url}?{urlencode(forwarded_query)}"
 
     body = await request.body()
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")}
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in ("host", "content-length", "authorization", "cookie")
+    }
 
     try:
         client = getattr(request.app.state, "http_client", None)
@@ -339,8 +361,8 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
         raise HTTPException(404, "Recording not found")
 
     file_size = fp.stat().st_size
-    from api.services.recorder import is_finalized_mp4
-    if file_size < 10240 or not is_finalized_mp4(fp, file_size):
+    from api.services.recorder import is_finalized_cached
+    if file_size < 10240 or not is_finalized_cached(str(fp), fp.stat()):
         raise HTTPException(409, "Recording segment is unfinalized or in-progress")
     range_header = request.headers.get("range")
     if range_header:

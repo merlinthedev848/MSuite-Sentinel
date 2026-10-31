@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
-  BarChart3,
   Camera as CamIcon,
   ExternalLink,
   Focus,

@@ -42,5 +42,14 @@ export const go2rtcBase = () => {
   return apiUrl('/go2rtc');
 };
 
-export const go2rtcUrl = (path: string) => joinUrl(go2rtcBase(), path);
+export const go2rtcUrl = (path: string) => {
+  const override = localStorage.getItem('mview_go2rtc_base');
+  if (override) return joinUrl(override, path);
+  const url = joinUrl(joinUrl(apiBase(), '/go2rtc'), path);
+  // <img>/<video> and fetch share this helper; the proxy now requires auth, and the
+  // token query param is the only form browsers can attach to media elements.
+  const token = localStorage.getItem('mview_token');
+  if (!token) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+};
 

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import random
 import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -48,7 +49,9 @@ class CameraRecorder:
 
     async def _run_loop(self):
         backoff = 5
+        loop = asyncio.get_running_loop()
         while not self._stop:
+            t0 = loop.time()
             try:
                 self.last_started_at = datetime.now(timezone.utc)
                 self.last_error = None
@@ -58,6 +61,8 @@ class CameraRecorder:
                 logger.info(f"[{self.camera_name}] Recorder cancelled.")
                 return
             except Exception as e:
+                if loop.time() - t0 > 60:
+                    backoff = 5  # it ran healthily for a while before failing
                 self.restart_count += 1
                 self.last_error = str(e)[-240:]
                 await local_core.publish("recorder_error", {
@@ -68,7 +73,7 @@ class CameraRecorder:
                 })
                 logger.warning(f"[{self.camera_name}] Recorder error: {e}. Retrying in {backoff}s...")
             if not self._stop:
-                await asyncio.sleep(backoff)
+                await asyncio.sleep(backoff + random.uniform(0, backoff * 0.25))
                 backoff = min(backoff * 2, 120)
 
     async def _record_once(self):
@@ -80,12 +85,13 @@ class CameraRecorder:
 
         # Probe the stream dynamically to detect valid audio
         has_audio = False
+        probe_proc = None
         try:
             probe_cmd = [
                 "ffprobe",
                 "-v", "error",
                 "-rtsp_transport", "tcp",
-                "-stimeout", "8000000",
+                "-timeout", "8000000",
                 "-show_entries", "stream=codec_type,codec_name",
                 "-of", "json",
                 self.rtsp_url
@@ -107,6 +113,9 @@ class CameraRecorder:
                             logger.info(f"[{self.camera_name}] Detected audio stream with codec: {codec}")
         except Exception as e:
             logger.warning(f"[{self.camera_name}] ffprobe stream analysis timed out or failed: {e}. Defaulting to video-only.")
+        finally:
+            if probe_proc is not None:
+                await _terminate_process(probe_proc)
 
         cmd = [
             "ffmpeg",
@@ -114,6 +123,7 @@ class CameraRecorder:
             "-analyzeduration", "10000000",
             "-probesize", "10000000",
             "-rtsp_transport", "tcp",
+            "-timeout", "10000000",            # 10s socket I/O timeout -> exit on stalled feed
             "-i", self.rtsp_url,
             "-map", "0:v",                     # Always map the video stream
             "-c:v", "copy",                    # Copy video stream — zero transcoding, zero quality loss
@@ -159,26 +169,46 @@ class CameraRecorder:
             stderr=asyncio.subprocess.PIPE,
         )
 
-        # Read stderr continuously to prevent pipe buffer saturation deadlock
-        stderr_lines = []
-        while True:
-            line = await proc.stderr.readline()
-            if not line:
-                break
-            decoded = line.decode(errors="replace").strip()
-            if decoded:
-                logger.debug(f"[{self.camera_name}] ffmpeg: {decoded}")
-                stderr_lines.append(decoded)
-                if len(stderr_lines) > 50:
-                    stderr_lines.pop(0)
+        # Read stderr continuously to prevent pipe buffer saturation deadlock.
+        # Bounded to the last 50 lines; the finally block guarantees the child is reaped even
+        # when this task is cancelled, otherwise orphaned ffmpeg processes pile up per edit.
+        stderr_lines: list[str] = []
+        try:
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                decoded = line.decode(errors="replace").strip()
+                if decoded:
+                    logger.debug(f"[{self.camera_name}] ffmpeg: {decoded}")
+                    stderr_lines.append(decoded)
+                    if len(stderr_lines) > 50:
+                        stderr_lines.pop(0)
 
-        await proc.wait()
+            await proc.wait()
+        finally:
+            await _terminate_process(proc)
 
         if proc.returncode not in (0, 255):  # 255 = SIGTERM (normal stop)
             err = "\n".join(stderr_lines) if stderr_lines else "unknown"
             raise RuntimeError(f"ffmpeg exited {proc.returncode}: {err[-300:]}")
 
         logger.info(f"[{self.camera_name}] ffmpeg segment completed normally.")
+
+
+async def _terminate_process(proc: "asyncio.subprocess.Process", grace: float = 5.0) -> None:
+    """SIGTERM (lets ffmpeg finalize the mp4), then SIGKILL after `grace` seconds."""
+    if proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=grace)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+    except ProcessLookupError:
+        pass
 
 
 async def register_go2rtc_stream(name: str, rtsp_url: str):
@@ -330,6 +360,24 @@ def is_finalized_mp4(file_path: str | Path, stat_size: int | None = None) -> boo
     return False
 
 
+# (path, size, mtime_ns) -> finalized?  Size/mtime in the key invalidate entries as a file grows,
+# so each segment is only inspected once instead of on every listing / Range request.
+_FINALIZED_CACHE: dict[tuple[str, int, int], bool] = {}
+_FINALIZED_CACHE_MAX = 200_000
+
+
+def is_finalized_cached(path: str, st: os.stat_result) -> bool:
+    key = (path, st.st_size, st.st_mtime_ns)
+    hit = _FINALIZED_CACHE.get(key)
+    if hit is not None:
+        return hit
+    result = is_finalized_mp4(path, st.st_size)
+    if len(_FINALIZED_CACHE) >= _FINALIZED_CACHE_MAX:
+        _FINALIZED_CACHE.clear()  # hard bound on memory
+    _FINALIZED_CACHE[key] = result
+    return result
+
+
 def list_recordings(camera_id: str | None = None) -> list[dict]:
     """Return a list of recording files across both hot and cold tiers, optionally filtered by camera."""
     results = []
@@ -368,13 +416,8 @@ def list_recordings(camera_id: str | None = None) -> list[dict]:
                     stat = entry.stat()
                     if stat.st_size < 10240:
                         continue
-                    file_mtime_utc = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-                    age_seconds = (now_utc - file_mtime_utc).total_seconds()
-                    # Skip unfinalized or actively writing segments
-                    if base == hot_base and (i == 0 or age_seconds < SEGMENT_DURATION + 10):
-                        if not is_finalized_mp4(entry.path, stat.st_size):
-                            continue
-                    elif not is_finalized_mp4(entry.path, stat.st_size):
+                    # Skip unfinalized / actively-writing segments (cached per path+size+mtime)
+                    if not is_finalized_cached(entry.path, stat):
                         continue
                     mtime = stat.st_mtime
                     size_mb = round(stat.st_size / 1_048_576, 2)
