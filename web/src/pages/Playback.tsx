@@ -107,6 +107,7 @@ const Playback: React.FC = () => {
   const timelineRef = useRef<HTMLDivElement>(null);
   const pendingSeek = useRef<number | null>(null);
   const failedSegmentsRef = useRef<Set<string>>(new Set());
+  const consecutiveErrorsRef = useRef<number>(0);
   const errorTimeoutRef = useRef<number | null>(null);
 
   const showVideoMessage = (msg: string, durationMs: number = 4000) => {
@@ -152,6 +153,7 @@ const Playback: React.FC = () => {
   useEffect(() => {
     if (!selectedCam) return;
     failedSegmentsRef.current.clear();
+    consecutiveErrorsRef.current = 0;
     setVideoError('');
     if (errorTimeoutRef.current) window.clearTimeout(errorTimeoutRef.current);
     let isMounted = true;
@@ -236,6 +238,9 @@ const Playback: React.FC = () => {
 
           setActiveFile(targetFile);
           setCurrentTimeMs(targetTime);
+          // Center the timeline window around the initial recording so it never pan-snaps on first play
+          setTimelineStart(targetTime - 3 * 3600 * 1000);
+          setTimelineEnd(targetTime + 3 * 3600 * 1000);
         } else {
           setActiveFile(null);
           setRecordings([]);
@@ -293,6 +298,7 @@ const Playback: React.FC = () => {
 
     if (file) {
       const offsetSeconds = (seekTargetMs - file.startTimestamp) / 1000;
+      consecutiveErrorsRef.current = 0;
       setActiveFile(file);
       setCurrentTimeMs(seekTargetMs);
       setVideoError('');
@@ -335,17 +341,11 @@ const Playback: React.FC = () => {
     const updatedTimeMs = activeFile.startTimestamp + currentVideoTime * 1000;
     setCurrentTimeMs(updatedTimeMs);
 
-    // Slide timeline forward if playhead is near the end
-    if (updatedTimeMs > timelineEnd - 30 * 1000) {
+    // Only gently advance timeline forward if the playing video reaches the right edge
+    if (!isDragging && updatedTimeMs > timelineEnd - 15 * 1000 && updatedTimeMs <= timelineEnd + 60 * 1000) {
       const span = timelineEnd - timelineStart;
-      setTimelineStart(updatedTimeMs - span * 0.1);
-      setTimelineEnd(updatedTimeMs + span * 0.9);
-    }
-    // Slide timeline backward if playhead is near or before the start
-    else if (updatedTimeMs < timelineStart + 30 * 1000) {
-      const span = timelineEnd - timelineStart;
-      setTimelineStart(updatedTimeMs - span * 0.9);
-      setTimelineEnd(updatedTimeMs + span * 0.1);
+      setTimelineStart(updatedTimeMs - span * 0.5);
+      setTimelineEnd(updatedTimeMs + span * 0.5);
     }
   };
 
@@ -401,35 +401,31 @@ const Playback: React.FC = () => {
 
     if (activeFile) {
       failedSegmentsRef.current.add(activeFile.url);
-      const currentIndex = recordings.findIndex(r => r.url === activeFile.url);
+      consecutiveErrorsRef.current += 1;
 
-      // Look for the closest valid un-failed segment (backwards first, then forwards)
-      let fallbackFile: RecordingFile | null = null;
-      for (let i = currentIndex - 1; i >= 0; i--) {
-        if (!failedSegmentsRef.current.has(recordings[i].url)) {
-          fallbackFile = recordings[i];
-          break;
-        }
-      }
-      if (!fallbackFile) {
-        for (let i = currentIndex + 1; i < recordings.length; i++) {
-          if (!failedSegmentsRef.current.has(recordings[i].url)) {
-            fallbackFile = recordings[i];
-            break;
-          }
-        }
-      }
+      // Never cascade-scroll across the timeline! Allow at most 1 automatic fallback step.
+      if (consecutiveErrorsRef.current <= 1) {
+        const currentIndex = recordings.findIndex(r => r.url === activeFile.url);
+        let fallbackFile: RecordingFile | null = null;
 
-      if (fallbackFile) {
-        setActiveFile(fallbackFile);
-        setCurrentTimeMs(fallbackFile.startTimestamp);
-        pendingSeek.current = 0;
-        setIsPlaying(true);
-        showVideoMessage('Skipped an unfinished recording segment.');
-        return;
+        // Prefer advancing forward to the next chronological segment; only step back 1 segment if we were on the very last segment
+        if (currentIndex !== -1 && currentIndex + 1 < recordings.length && !failedSegmentsRef.current.has(recordings[currentIndex + 1].url)) {
+          fallbackFile = recordings[currentIndex + 1];
+        } else if (currentIndex > 0 && !failedSegmentsRef.current.has(recordings[currentIndex - 1].url)) {
+          fallbackFile = recordings[currentIndex - 1];
+        }
+
+        if (fallbackFile) {
+          setActiveFile(fallbackFile);
+          setCurrentTimeMs(fallbackFile.startTimestamp);
+          pendingSeek.current = 0;
+          setIsPlaying(true);
+          return;
+        }
       }
     }
-    showVideoMessage('Failed to load recording file. The segment may still be finalizing.', 6000);
+    setIsPlaying(false);
+    showVideoMessage('Unable to play this recording segment in the browser.', 5000);
   };
 
   // ── 4. Transport Control Handlers ──────────────────────────────────
@@ -772,6 +768,7 @@ const Playback: React.FC = () => {
                 onEnded={handleVideoEnded}
                 onWaiting={() => setBuffering(true)}
                 onPlaying={() => {
+                  consecutiveErrorsRef.current = 0;
                   setBuffering(false);
                   setIsPlaying(true);
                   setVideoError('');

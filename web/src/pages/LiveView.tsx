@@ -50,16 +50,22 @@ interface RecordingFile {
 type ViewMode = 'live' | 'playback' | 'analytics';
 
 const parseRecording = (r: any): RecordingFile => {
-  const match = r.filename.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
-  let start = new Date(r.created_at).getTime();
-  if (match) {
-    const [, y, m, d, hr, min, sec] = match;
-    start = new Date(parseInt(y), parseInt(m) - 1, parseInt(d), parseInt(hr), parseInt(min), parseInt(sec)).getTime();
+  let start = 0;
+  if (r.created_at) {
+    const dt = new Date(r.created_at).getTime();
+    if (!isNaN(dt)) start = dt;
+  }
+  if (!start) {
+    const match = r.filename.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
+    if (match) {
+      const [, y, m, d, hr, min, sec] = match;
+      start = Date.UTC(parseInt(y), parseInt(m) - 1, parseInt(d), parseInt(hr), parseInt(min), parseInt(sec));
+    }
   }
   return {
     ...r,
     startTimestamp: start,
-    endTimestamp: Math.max(start + 5000, new Date(r.created_at).getTime()),
+    endTimestamp: start + 60000,
   };
 };
 

@@ -361,9 +361,46 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
         raise HTTPException(404, "Recording not found")
 
     file_size = fp.stat().st_size
-    from api.services.recorder import is_finalized_cached
+    from api.services.recorder import is_finalized_cached, needs_browser_transcode, _terminate_process
     if file_size < 10240 or not is_finalized_cached(str(fp), fp.stat()):
         raise HTTPException(409, "Recording segment is unfinalized or in-progress")
+
+    # If this segment was recorded with H.265/HEVC (hvc1/hev1) via -c:v copy,
+    # transcode it once to browser-compatible H.264 (avc1) + faststart so Chrome/Edge/Firefox can play it.
+    if needs_browser_transcode(fp, file_size):
+        cache_dir = Path(settings.storage_path) / "transcoded_cache" / camera_id
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cached_fp = cache_dir / filename
+        if not cached_fp.exists() or cached_fp.stat().st_size < 10240:
+            tmp_fp = cache_dir / f".tmp_{os.getpid()}_{filename}"
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-i", str(fp),
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                "-pix_fmt", "yuv420p", "-profile:v", "main",
+                "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart",
+                str(tmp_fp),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=45.0)
+                if proc.returncode == 0 and tmp_fp.exists() and tmp_fp.stat().st_size >= 10240:
+                    tmp_fp.replace(cached_fp)
+            except Exception:
+                pass
+            finally:
+                await _terminate_process(proc)
+                if tmp_fp.exists():
+                    try:
+                        tmp_fp.unlink()
+                    except OSError:
+                        pass
+        if cached_fp.exists() and cached_fp.stat().st_size >= 10240:
+            fp = cached_fp
+            file_size = fp.stat().st_size
+
     range_header = request.headers.get("range")
     if range_header:
         start = 0

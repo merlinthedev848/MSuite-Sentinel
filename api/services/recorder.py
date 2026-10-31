@@ -363,6 +363,31 @@ def is_finalized_mp4(file_path: str | Path, stat_size: int | None = None) -> boo
     return False
 
 
+def needs_browser_transcode(file_path: str | Path, stat_size: int | None = None) -> bool:
+    """
+    Detect whether an MP4 recording uses H.265/HEVC (hvc1/hev1) or lacks H.264 (avc1),
+    requiring on-the-fly H.264 remux/transcode for universal browser playback.
+    """
+    try:
+        p = Path(file_path)
+        size = stat_size if stat_size is not None else p.stat().st_size
+        with open(p, "rb") as f:
+            header = f.read(min(size, 131072))
+            if b"hvc1" in header or b"hev1" in header:
+                return True
+            if b"avc1" in header:
+                return False
+            if size > 131072:
+                check_tail = min(size, 262144)
+                f.seek(size - check_tail)
+                tail = f.read(check_tail)
+                if b"hvc1" in tail or b"hev1" in tail:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 # (path, size, mtime_ns) -> finalized?  Size/mtime in the key invalidate entries as a file grows,
 # so each segment is only inspected once instead of on every listing / Range request.
 _FINALIZED_CACHE: dict[tuple[str, int, int], bool] = {}
@@ -407,6 +432,9 @@ def list_recordings(camera_id: str | None = None) -> list[dict]:
 
             entries.sort(key=lambda x: x.name, reverse=True)
 
+            active_recorders = recorder_manager.status()
+            now_ts = now_utc.timestamp()
+
             for i, entry in enumerate(entries):
                 unique_key = (cam_dir.name, entry.name)
                 if unique_key in seen_filenames:
@@ -418,6 +446,9 @@ def list_recordings(camera_id: str | None = None) -> list[dict]:
                 try:
                     stat = entry.stat()
                     if stat.st_size < 10240:
+                        continue
+                    # Always skip the newest segment if this camera is actively recording and the file was modified recently
+                    if i == 0 and cam_dir.name in active_recorders and (now_ts - stat.st_mtime) < (SEGMENT_DURATION + 15):
                         continue
                     # Skip unfinalized / actively-writing segments (cached per path+size+mtime)
                     if not is_finalized_cached(entry.path, stat):
