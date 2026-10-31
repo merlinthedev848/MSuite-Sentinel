@@ -106,12 +106,16 @@ const CameraFeedComponent: React.FC<{
 
   const iceServersKey = useMemo(() => JSON.stringify(iceServers), [iceServers]);
 
+  const camOffline = cam.status === 'offline';
+
   useEffect(() => {
-    if (cam.status === 'offline' || !cam.rtsp_url_main) return;
+    if (camOffline || !cam.rtsp_url_main) return;
 
     let pc: RTCPeerConnection | null = null;
     let rtcTimeout: number | undefined;
+    let disconnectTimer: number | undefined;
     setConnected(false);
+    setUseMjpegFallback(false);
 
     const fallbackToHls = () => {
       setUseMjpegFallback(true);
@@ -136,13 +140,25 @@ const CameraFeedComponent: React.FC<{
 
     pc.oniceconnectionstatechange = () => {
       if (pc) {
-        if (pc.iceConnectionState === 'connected') {
+        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
           window.clearTimeout(rtcTimeout);
+          window.clearTimeout(disconnectTimer);
           setConnected(true);
           videoRef.current?.play().catch(err => console.log("LiveView play on connection success error:", err));
         }
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-          console.warn('[LiveView WebRTC] connection failed/disconnected. Falling back to HLS...');
+        if (pc.iceConnectionState === 'disconnected') {
+          // 'disconnected' is frequently transient on WebRTC and recovers by itself.
+          // Give it a grace period, then renegotiate WebRTC instead of dropping to MJPEG.
+          window.clearTimeout(disconnectTimer);
+          disconnectTimer = window.setTimeout(() => {
+            if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+              console.warn('[LiveView WebRTC] stayed disconnected; renegotiating...');
+              setRetryNonce(n => n + 1);
+            }
+          }, 4000);
+        }
+        if (pc.iceConnectionState === 'failed') {
+          console.warn('[LiveView WebRTC] connection failed. Falling back to MJPEG...');
           fallbackToHls();
         }
       }
@@ -186,6 +202,7 @@ const CameraFeedComponent: React.FC<{
 
     return () => {
       window.clearTimeout(rtcTimeout);
+      window.clearTimeout(disconnectTimer);
       if (pc) pc.close();
       if (videoRef.current) {
         if (videoRef.current.srcObject) {
@@ -201,7 +218,7 @@ const CameraFeedComponent: React.FC<{
       }
       setConnected(false);
     };
-  }, [cam.id, cam.name, cam.status, cam.rtsp_url_main, streamName, isMicActive, retryNonce, iceServersKey]);
+  }, [cam.id, camOffline, cam.rtsp_url_main, streamName, isMicActive, retryNonce, iceServersKey]);
 
   useEffect(() => {
     const video = videoRef.current;

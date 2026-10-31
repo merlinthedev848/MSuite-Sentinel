@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSONResponse
+from starlette.background import BackgroundTask
 from contextlib import asynccontextmanager
 import os
 import logging
@@ -300,7 +301,10 @@ async def proxy_go2rtc(request: Request, path: str = ""):
         return StreamingResponse(
             resp.aiter_bytes(),
             status_code=resp.status_code,
-            headers={k: v for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-encoding", "transfer-encoding")}
+            headers={k: v for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-encoding", "transfer-encoding")},
+            # Always release the upstream go2rtc connection when the browser disconnects,
+            # otherwise every MJPEG/HLS fallback leaks a pooled connection.
+            background=BackgroundTask(resp.aclose),
         )
     except Exception as e:
         raise HTTPException(502, f"go2rtc proxy error: {e}")
