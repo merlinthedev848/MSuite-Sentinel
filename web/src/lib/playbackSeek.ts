@@ -11,10 +11,14 @@ export interface ResolvedClip {
   seekMs: number;
 }
 
+/** A click this close to a segment still lands on it. A gap of hours does not. */
+export const MAX_GAP_SNAP_MS = 3 * 60 * 1000;
+
 /**
  * Pick the recording that should play for a timeline instant.
- * A time that falls in a gap moves forward to the next segment.
- * Only a time past the last segment stays on that segment, at its end.
+ * A short gap moves to the next segment. A longer gap is empty: jumping to a
+ * file hours later played the wrong time and hid the earlier footage.
+ * Only a time just past the last segment stays on that segment, at its end.
  */
 export function resolvePlaybackTarget(
   clips: ClipSpan[],
@@ -34,13 +38,19 @@ export function resolvePlaybackTarget(
   if (!findNearest) return null;
 
   const upcoming = ordered.find((clip) => clip.startTimestamp >= targetMs);
-  if (upcoming) return { ...upcoming, seekMs: upcoming.startTimestamp };
+  if (upcoming && upcoming.startTimestamp - targetMs <= MAX_GAP_SNAP_MS) {
+    return { ...upcoming, seekMs: upcoming.startTimestamp };
+  }
+  if (upcoming) return null;
 
   const last = ordered[ordered.length - 1];
-  return {
-    ...last,
-    seekMs: Math.max(last.startTimestamp, last.endTimestamp - 250),
-  };
+  if (targetMs - last.endTimestamp <= MAX_GAP_SNAP_MS) {
+    return {
+      ...last,
+      seekMs: Math.max(last.startTimestamp, last.endTimestamp - 250),
+    };
+  }
+  return null;
 }
 
 export interface LoadedSeek {

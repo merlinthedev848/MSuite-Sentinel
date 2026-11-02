@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 from api.config import settings
-from api.services.recorder import list_recordings, is_finalized_mp4
+from api.services.recorder import list_recordings
 
 router = APIRouter(prefix="/recordings-list", tags=["Recordings"])
 
@@ -65,36 +65,41 @@ async def export_evidence(req: ExportRequest):
         cam_id = safe_camera_id(req.camera_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid camera id")
-    hot_dir = Path(settings.recordings_dir) / cam_id
-    cold_env = os.getenv("COLD_STORAGE_PATH", "").strip()
-    cold_dir = Path(cold_env) / cam_id if cold_env else None
+    from api.services.recorder import _recording_roots, inspect_mp4
 
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     candidate_files = []
-    for directory in (hot_dir, cold_dir):
-        if directory is not None and directory.exists():
-            for p in directory.glob("*.mp4"):
-                try:
-                    stat = p.stat()
-                    if stat.st_size < 10240 or not is_finalized_mp4(p, stat.st_size):
-                        continue
-                except OSError:
+    seen = set()
+    for root in _recording_roots():
+        directory = root / cam_id
+        if not directory.is_dir():
+            continue
+        for p in directory.rglob("*.mp4"):
+            if p.name.startswith(".") or p.name in seen:
+                continue
+            try:
+                stat = p.stat()
+                info = inspect_mp4(p, stat.st_size)
+                if stat.st_size < 10240 or not info.finalized:
                     continue
-                match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", p.name)
-                if match:
-                    y, mo, d, h, mi, s = map(int, match.groups())
-                    file_start = datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
-                    candidate_files.append((file_start, p))
+            except OSError:
+                continue
+            match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", p.name)
+            if match:
+                y, mo, d, h, mi, s = map(int, match.groups())
+                file_start = datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
+                duration = info.duration_seconds or getattr(settings, "segment_seconds", 60)
+                candidate_files.append((file_start, p, duration))
+                seen.add(p.name)
 
     if not candidate_files:
         raise HTTPException(status_code=404, detail="No recorded video found for this camera")
 
     candidate_files.sort(key=lambda x: x[0])
 
-    segment_duration = getattr(settings, "segment_seconds", 60)
     matching = []
-    for f_start, f_path in candidate_files:
-        f_end = f_start + timedelta(seconds=segment_duration)
+    for f_start, f_path, duration in candidate_files:
+        f_end = f_start + timedelta(seconds=duration)
         if (f_start <= end_dt) and (f_end >= start_dt):
             matching.append(f_path)
 

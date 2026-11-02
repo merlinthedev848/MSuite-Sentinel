@@ -79,6 +79,33 @@ check(
 sample_jpeg = b"\xff\xd8" + b"\x00" * 40 + b"\xff\xd9"
 check("detector jpeg is stored", event_jpeg_bytes({"jpeg": __import__("base64").b64encode(sample_jpeg).decode()}) == sample_jpeg)
 check("non-jpeg payload is ignored", event_jpeg_bytes({"jpeg": __import__("base64").b64encode(b"not-a-jpeg-payload-at-all").decode()}) is None)
+def _mp4_box(kind: bytes, payload: bytes) -> bytes:
+    return (8 + len(payload)).to_bytes(4, "big") + kind + payload
+
+mvhd = _mp4_box(b"mvhd", bytes(4) + bytes(8) + (1000).to_bytes(4, "big") + (150_000).to_bytes(4, "big") + bytes(80))
+long_file = (
+    _mp4_box(b"ftyp", b"isom" + bytes(8))
+    + _mp4_box(b"mdat", bytes(300_000))
+    + _mp4_box(b"moov", mvhd + b"hvc1" + _mp4_box(b"free", bytes(300_000)))
+)
+long_path = Path(settings.recordings_dir) / "cam-early" / "2026-10-31" / "2026-10-31_12-38-00.mp4"
+long_path.parent.mkdir(parents=True, exist_ok=True)
+long_path.write_bytes(long_file)
+from api.services.recorder import inspect_mp4, list_recordings, locate_recording
+inspected = inspect_mp4(long_path, long_path.stat().st_size)
+check(
+    "long moov is finalized with its real duration",
+    inspected.finalized and inspected.hevc and inspected.duration_seconds == 150,
+    str((inspected.finalized, inspected.hevc, inspected.duration_seconds)),
+)
+listed = list_recordings("cam-early")
+check(
+    "nested early segment is listed for its full length",
+    len(listed) == 1 and listed[0]["filename"].endswith("12-38-00.mp4") and listed[0]["duration_seconds"] == 150,
+    str(listed),
+)
+found = locate_recording("cam-early", "2026-10-31_12-38-00.mp4")
+check("nested segment is served by file name", found is not None and found.name == long_path.name, str(found))
 check("person rule ignores cars", _rule_matches("person_detected", "car", []) is False)
 check("person rule matches person", _rule_matches("person_detected", "person", []) is True)
 check("empty object list does not match", _rule_matches("object", "truck", []) is False)
@@ -123,6 +150,8 @@ check(
 )
 
 with TestClient(app, client=("127.0.0.1", 50000)) as client:
+    # Schema creation runs after the port opens. Give that task a moment.
+    time.sleep(0.4)
     check("openapi hidden", client.get("/openapi.json").status_code == 404)
     check("loopback cameras require auth", client.get("/cameras").status_code == 401)
     check("floorplans require auth", client.get("/static/maps/floor.png").status_code == 401)
