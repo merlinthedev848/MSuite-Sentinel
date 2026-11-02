@@ -97,6 +97,15 @@ auth_source = (ROOT / "api" / "routers" / "auth.py").read_text()
 check("admin backdoor removed", 'password in ("admin"' not in auth_source and "is_loopback" not in (ROOT / "api" / "main.py").read_text())
 system_source = (ROOT / "api" / "routers" / "system.py").read_text()
 check("updater cannot reset git", "reset --hard" not in system_source and "docker compose" not in system_source)
+installer = (ROOT / "install.sh").read_text()
+check("installer does not hard-reset git", "reset --hard" not in installer and "merge --ff-only" in installer)
+check("installer plans image builds and still waits for postgres", "image-build-plan.sh" in installer and "pg_isready" in installer)
+check(
+    "built images stay local",
+    "mview-sentinel-api:local" in compose
+    and "mview-sentinel-detector:local" in compose
+    and compose.count("pull_policy: never") == 2,
+)
 
 with TestClient(app, client=("127.0.0.1", 50000)) as client:
     check("openapi hidden", client.get("/openapi.json").status_code == 404)

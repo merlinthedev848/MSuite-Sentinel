@@ -15,3 +15,6 @@ env/
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Local image-build stamps written by install.sh
+.sentinel/
