@@ -164,11 +164,10 @@ async def get_camera_snapshot(camera_id: str, db: AsyncSession = Depends(get_db)
     if not rtsp_url:
         raise HTTPException(400, "Camera has no RTSP stream configured")
 
-    from api.services.camera_picture import fetch_camera_jpeg, request_keyframe
+    from api.services.camera_picture import fetch_camera_jpeg
 
-    # The picture API does not wait for the next IDR. The keyframe request is
-    # what lets the video element take over without sitting out a 5s GOP.
-    asyncio.create_task(request_keyframe(rtsp_url, cam.onvif_username, cam.onvif_password))
+    # One keyframe is requested when the stream is registered. Requesting one
+    # on every still resets the GOP and the tile blinks.
     jpeg = await fetch_camera_jpeg(rtsp_url, cam.onvif_username, cam.onvif_password)
     if jpeg:
         return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})

@@ -507,7 +507,10 @@ def inspect_mp4(file_path: str | Path, stat_size: int | None = None) -> Mp4Info:
                     break
                 offset += box_size
             if moov_at is None or moov_size <= 0:
-                return _EMPTY_MP4
+                found = _moov_in_edges(handle, size)
+                if found is None:
+                    return _EMPTY_MP4
+                moov_at, moov_size = found
             handle.seek(moov_at)
             moov = handle.read(min(moov_size, _MOOV_READ_LIMIT))
     except OSError:
@@ -515,6 +518,62 @@ def inspect_mp4(file_path: str | Path, stat_size: int | None = None) -> Mp4Info:
     duration = _duration_in(moov)
     hevc = b"hvc1" in moov or b"hev1" in moov
     return Mp4Info(True, duration, hevc)
+
+
+def _moov_in_blob(blob: bytes, base: int, file_size: int) -> tuple[int, int] | None:
+    """A moov box inside one window. Used when an earlier box claims the rest of the file."""
+    start = 4
+    while True:
+        at = blob.find(b"moov", start)
+        if at < 0:
+            return None
+        box_size = int.from_bytes(blob[at - 4:at], "big")
+        header_len = 8
+        payload_at = at + 4
+        if box_size == 1 and at + 12 <= len(blob):
+            box_size = int.from_bytes(blob[at + 4:at + 12], "big")
+            header_len = 16
+            payload_at = at + 12
+        abs_off = base + at - 4
+        if header_len <= box_size <= file_size - abs_off and payload_at <= len(blob):
+            payload_size = box_size - header_len
+            payload = blob[payload_at:payload_at + min(payload_size, _MOOV_READ_LIMIT)]
+            if _duration_in(payload) is not None:
+                return abs_off + header_len, payload_size
+        start = at + 4
+
+
+def _moov_in_edges(handle, size: int) -> tuple[int, int] | None:
+    """Find a real moov in the head or the tail when the box walk stops early.
+
+    A segment whose mdat size is zero swallows every later box, so the walk
+    never reaches moov. The picture is still in the file.
+    """
+    windows = [(0, min(size, _MOOV_READ_LIMIT))]
+    tail = min(size, 8_000_000)
+    if size > tail:
+        windows.append((size - tail, size))
+    for begin, end in windows:
+        handle.seek(begin)
+        blob = handle.read(end - begin)
+        found = _moov_in_blob(blob, begin, size)
+        if found is not None:
+            return found
+    return None
+
+
+def believable_duration(seconds: float | None, size: int) -> float:
+    """Movie-header duration, or one segment when that header cannot be the picture.
+
+    A 60-second file whose header says several hours covers the whole morning
+    on the timeline. Seeking into it plays nothing, so the player sits on the
+    next real file.
+    """
+    if not seconds or seconds < 0.5:
+        return float(SEGMENT_DURATION)
+    if seconds > SEGMENT_DURATION * 2 and size / seconds < 512:
+        return float(SEGMENT_DURATION)
+    return seconds
 
 
 def is_finalized_mp4(file_path: str | Path, stat_size: int | None = None) -> bool:
@@ -647,7 +706,7 @@ def _scan_recordings(camera_id: str | None = None) -> list[dict]:
                 else:
                     created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 
-                duration = info.duration_seconds if info.duration_seconds and info.duration_seconds >= 0.5 else float(SEGMENT_DURATION)
+                duration = believable_duration(info.duration_seconds, stat.st_size)
                 results.append({
                     "camera_id": cam_dir.name,
                     "filename": path.name,

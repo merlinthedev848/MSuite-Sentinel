@@ -5,7 +5,7 @@ import {
   Search, Video, Download, Maximize2 
 } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
-import { resolveLoadedSeek, resolvePlaybackTarget, timelineMs } from '../lib/playbackSeek';
+import { edgePieces, resolveLoadedSeek, resolvePlaybackTarget, timelineMs, uncoveredDays, type EdgePiece, type EdgeSegment } from '../lib/playbackSeek';
 
 const inputDate = (date: Date) => {
   const y = date.getFullYear();
@@ -40,7 +40,35 @@ interface RecordingFile {
   startTimestamp: number;
   endTimestamp: number;
   segmentMs?: number;
+  edge?: boolean;
+  track?: string;
 }
+
+const edgeFile = (cameraId: string, piece: EdgePiece): RecordingFile => ({
+  camera_id: cameraId,
+  filename: `camera-${piece.track}-${piece.startTimestamp}`,
+  path: '',
+  size_mb: 0,
+  created_at: new Date(piece.startTimestamp).toISOString(),
+  url: `edge:${cameraId}:${piece.track}:${piece.startTimestamp}:${piece.endTimestamp}`,
+  duration_seconds: (piece.endTimestamp - piece.startTimestamp) / 1000,
+  startTimestamp: piece.startTimestamp,
+  endTimestamp: piece.endTimestamp,
+  segmentMs: piece.endTimestamp - piece.startTimestamp,
+  edge: true,
+  track: piece.track,
+});
+
+const fetchEdgeSegments = async (cameraId: string, dayMs: number): Promise<EdgeSegment[]> => {
+  const start = new Date(dayMs).toISOString();
+  const end = new Date(dayMs + 24 * 3600 * 1000).toISOString();
+  const res = await fetch(apiUrl(
+    `/recordings-list/edge?camera_id=${encodeURIComponent(cameraId)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+  ));
+  if (!res.ok) return [];
+  const body = await res.json().catch(() => null);
+  return Array.isArray(body?.segments) ? body.segments : [];
+};
 
 interface CameraEvent {
   id: string;
@@ -114,6 +142,9 @@ const Playback: React.FC = () => {
   const timeBaseRef = useRef(0);
   const retryCountRef = useRef(0);
   const errorTimeoutRef = useRef<number | null>(null);
+  const recordingsRef = useRef<RecordingFile[]>([]);
+  const edgeJobsRef = useRef<Map<string, Promise<EdgeSegment[]>>>(new Map());
+  const seekGen = useRef(0);
 
   const showVideoMessage = (msg: string, durationMs: number = 4000) => {
     setVideoError(msg);
@@ -154,10 +185,44 @@ const Playback: React.FC = () => {
     loadCameras();
   }, [initCamId]);
 
+  const rememberRecordings = (next: RecordingFile[]) => {
+    recordingsRef.current = next;
+    setRecordings(next);
+    return next;
+  };
+
+  const ensureEdge = async (camId: string, days: number[], base: RecordingFile[]) => {
+    const wanted = days.slice(0, 3);
+    if (wanted.length === 0) return base;
+    const jobs = wanted.map(day => {
+      const key = `${camId}:${day}`;
+      let job = edgeJobsRef.current.get(key);
+      if (!job) {
+        job = fetchEdgeSegments(camId, day).catch(() => [] as EdgeSegment[]);
+        edgeJobsRef.current.set(key, job);
+      }
+      return job;
+    });
+    const batches = await Promise.all(jobs);
+    const local = base.filter(item => !item.edge);
+    const wantedSet = new Set(wanted);
+    const keep = base.filter(item => {
+      if (!item.edge) return false;
+      const date = new Date(item.startTimestamp);
+      const day = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+      return !wantedSet.has(day);
+    });
+    const extra = edgePieces(batches.flat(), local).map(piece => edgeFile(camId, piece));
+    const merged = [...local, ...keep, ...extra];
+    merged.sort((a, b) => a.startTimestamp - b.startTimestamp);
+    return merged;
+  };
+
   // ── 2. Load recordings and events for selected camera ──────────────
   useEffect(() => {
     if (!selectedCam) return;
     retryCountRef.current = 0;
+    edgeJobsRef.current = new Map();
     setVideoError('');
     if (errorTimeoutRef.current) window.clearTimeout(errorTimeoutRef.current);
     let isMounted = true;
@@ -212,8 +277,8 @@ const Playback: React.FC = () => {
             }
             recs[i].endTimestamp = end;
           }
-          if (isMounted) setRecordings(recs);
         }
+        if (isMounted) rememberRecordings(recs);
 
         let evs: CameraEvent[] = [];
         if (eventRes.ok) {
@@ -225,28 +290,60 @@ const Playback: React.FC = () => {
           if (isMounted) setEvents(evs);
         }
 
-        // Initialize timeline and active file. A detection time seeks into that
-        // instant. A short gap moves to the next segment. A long gap stays empty.
-        if (isMounted && recs.length > 0) {
-          let targetMs = recs[recs.length - 1].startTimestamp;
-          if (initTimeParam) {
-            const t = new Date(initTimeParam).getTime();
-            if (!isNaN(t)) targetMs = t;
+        // A detection time seeks into that instant. A short gap moves to the
+        // next segment. A long gap stays empty instead of jumping to a later file.
+        let targetMs = recs.length > 0 ? recs[recs.length - 1].startTimestamp : Date.now();
+        if (initTimeParam) {
+          const t = new Date(initTimeParam).getTime();
+          if (!isNaN(t)) targetMs = t;
+        }
+        const openResolved = (clips: RecordingFile[], resolvedUrl: string, seekMs: number) => {
+          const file = clips.find(item => item.url === resolvedUrl);
+          if (!file) return;
+          const offset = Math.max(0, (seekMs - file.startTimestamp) / 1000);
+          if (file.edge) {
+            timeBaseRef.current = offset;
+            pendingSeek.current = null;
+          } else {
+            timeBaseRef.current = 0;
+            pendingSeek.current = offset;
           }
-          const resolved = resolvePlaybackTarget(recs, targetMs, true);
-          const file = resolved ? recs.find(item => item.url === resolved.url) : recs[recs.length - 1];
-          const seekMs = resolved?.seekMs ?? file!.startTimestamp;
-          const offset = Math.max(0, (seekMs - (file?.startTimestamp || seekMs)) / 1000);
-          pendingSeek.current = offset;
-          timeBaseRef.current = 0;
-          if (file) setActiveFile(file);
+          setActiveFile(file);
           setClipOffset(offset);
           setCurrentTimeMs(seekMs);
-          setTimelineStart(seekMs - 3 * 3600 * 1000);
-          setTimelineEnd(seekMs + 3 * 3600 * 1000);
-        } else {
+          setVideoError('');
+          setBuffering(true);
+          setIsPlaying(true);
+        };
+        const gen = ++seekGen.current;
+        const localHit = resolvePlaybackTarget(recs, targetMs, true);
+        if (isMounted && localHit) {
+          openResolved(recs, localHit.url, localHit.seekMs);
+          setTimelineStart(localHit.seekMs - 3 * 3600 * 1000);
+          setTimelineEnd(localHit.seekMs + 3 * 3600 * 1000);
+        } else if (isMounted) {
           setActiveFile(null);
-          setRecordings([]);
+          setCurrentTimeMs(targetMs);
+          setTimelineStart(targetMs - 3 * 3600 * 1000);
+          setTimelineEnd(targetMs + 3 * 3600 * 1000);
+          setVideoError('No recorder file covers this time. Checking the camera...');
+        }
+
+        const points = evs.map(event => event.timestampMs).filter(stamp => !Number.isNaN(stamp));
+        const days = uncoveredDays(recs, points.concat(targetMs)).slice(0, 3);
+        if (isMounted && days.length > 0) {
+          const merged = await ensureEdge(selectedCam.id, days, recs);
+          if (isMounted && gen === seekGen.current) {
+            rememberRecordings(merged);
+            const again = resolvePlaybackTarget(merged, targetMs, true);
+            if (!localHit && again) {
+              openResolved(merged, again.url, again.seekMs);
+            } else if (!localHit) {
+              setVideoError('No recording segment covers the selected date and time. The camera has no footage for that gap either.');
+            }
+          }
+        } else if (isMounted && !localHit) {
+          setVideoError('No recording segment covers the selected date and time.');
         }
       } catch (err) {
         console.error('Failed to load recordings', err);
@@ -270,9 +367,15 @@ const Playback: React.FC = () => {
   const openClip = (file: RecordingFile, offsetSec: number) => {
     const offset = Math.max(0, offsetSec);
     const video = videoRef.current;
-    const sameFile = activeFile?.url === file.url && video;
-    timeBaseRef.current = 0;
-    pendingSeek.current = offset;
+    const sameFile = !file.edge && activeFile?.url === file.url && video;
+    if (file.edge) {
+      // The stream already starts at this offset. Media time 0 is that instant.
+      timeBaseRef.current = offset;
+      pendingSeek.current = null;
+    } else {
+      timeBaseRef.current = 0;
+      pendingSeek.current = offset;
+    }
     setCurrentTimeMs(file.startTimestamp + offset * 1000);
     setVideoError('');
     setBuffering(true);
@@ -289,14 +392,26 @@ const Playback: React.FC = () => {
     setClipOffset(offset);
   };
 
-  const seekToTime = (targetTimeMs: number, findNearest: boolean = false) => {
-    const resolved = resolvePlaybackTarget(recordings, targetTimeMs, findNearest);
+  const seekToTime = async (targetTimeMs: number, findNearest: boolean = false) => {
+    const gen = ++seekGen.current;
+    let clips = recordingsRef.current;
+    let resolved = resolvePlaybackTarget(clips, targetTimeMs, findNearest);
+    if (!resolved && selectedCam) {
+      const day = new Date(targetTimeMs);
+      const dayMs = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
+      clips = await ensureEdge(selectedCam.id, [dayMs], clips);
+      if (gen !== seekGen.current) return false;
+      rememberRecordings(clips);
+      resolved = resolvePlaybackTarget(clips, targetTimeMs, findNearest);
+    }
     if (!resolved) {
       setCurrentTimeMs(targetTimeMs);
-      setVideoError('No recording segment covers the selected date and time.');
+      setActiveFile(null);
+      setIsPlaying(false);
+      setVideoError('No recording segment covers the selected date and time. The camera has no footage for that gap either.');
       return false;
     }
-    const file = recordings.find(item => item.url === resolved.url);
+    const file = clips.find(item => item.url === resolved.url);
     if (!file) return false;
     const offset = Math.max(0, (resolved.seekMs - file.startTimestamp) / 1000);
     if (resolved.seekMs < timelineStart || resolved.seekMs > timelineEnd) {
@@ -334,6 +449,18 @@ const Playback: React.FC = () => {
     const video = videoRef.current;
     if (!video) return;
     video.playbackRate = speeds[speedIndex];
+    if (activeFile?.edge) {
+      pendingSeek.current = null;
+      if (isPlaying) {
+        video.play().catch(err => {
+          if (err.name === 'NotAllowedError') {
+            video.muted = true;
+            video.play().catch(() => {});
+          }
+        });
+      }
+      return;
+    }
     const want = pendingSeek.current;
     if (want !== null) {
       const decision = resolveLoadedSeek(want, video.duration);
@@ -381,7 +508,12 @@ const Playback: React.FC = () => {
     }
     setBuffering(false);
     setIsPlaying(false);
-    showVideoMessage('Unable to play this recording segment in the browser.', 0);
+    showVideoMessage(
+      activeFile?.edge
+        ? 'The camera did not return footage for this time.'
+        : 'Unable to play this recording segment in the browser.',
+      0,
+    );
   };
 
   // ── 4. Transport Control Handlers ──────────────────────────────────
@@ -599,6 +731,13 @@ const Playback: React.FC = () => {
   const recordingSrc = (url: string) => apiUrl(url);
 
   const withStart = (url: string, offsetSec: number) => {
+    if (activeFile?.edge) {
+      const startMs = activeFile.startTimestamp + Math.max(0, offsetSec) * 1000;
+      const track = activeFile.track || '101';
+      return apiUrl(
+        `/recordings/${encodeURIComponent(activeFile.camera_id)}/edge?start=${encodeURIComponent(new Date(startMs).toISOString())}&end=${encodeURIComponent(new Date(activeFile.endTimestamp).toISOString())}&track=${encodeURIComponent(track)}`,
+      );
+    }
     const base = recordingSrc(url);
     const joiner = base.includes('?') ? '&' : '?';
     return `${base}${joiner}t=${offsetSec.toFixed(3)}`;
@@ -822,8 +961,8 @@ const Playback: React.FC = () => {
           ) : (
             <div style={{ textAlign: 'center', color: 'var(--t3)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
               <Video size={48} strokeWidth={1} />
-              <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--t2)' }}>No recordings available</div>
-              <div style={{ fontSize: '0.8rem' }}>Choose another camera or ensure recording is active.</div>
+              <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--t2)' }}>{videoError ? 'No footage at this time' : 'No recordings available'}</div>
+              <div style={{ fontSize: '0.8rem', maxWidth: 420 }}>{videoError || 'Choose another camera or ensure recording is active.'}</div>
             </div>
           )}
         </div>

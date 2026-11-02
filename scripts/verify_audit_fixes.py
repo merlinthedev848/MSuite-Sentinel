@@ -106,6 +106,73 @@ check(
 )
 found = locate_recording("cam-early", "2026-10-31_12-38-00.mp4")
 check("nested segment is served by file name", found is not None and found.name == long_path.name, str(found))
+
+mvhd_hours = _mp4_box(b"mvhd", bytes(4) + bytes(8) + (1000).to_bytes(4, "big") + (10_800_000).to_bytes(4, "big") + bytes(80))
+bogus = _mp4_box(b"ftyp", b"isom" + bytes(8)) + _mp4_box(b"mdat", bytes(20_000)) + _mp4_box(b"moov", mvhd_hours)
+bogus_path = Path(settings.recordings_dir) / "cam-bogus" / "2026-10-31_12-38-00.mp4"
+bogus_path.parent.mkdir(parents=True, exist_ok=True)
+bogus_path.write_bytes(bogus)
+bogus_listed = list_recordings("cam-bogus")
+check(
+    "overlong header does not cover the morning",
+    len(bogus_listed) == 1 and bogus_listed[0]["duration_seconds"] == 60,
+    str(bogus_listed),
+)
+
+mvhd_90 = _mp4_box(b"mvhd", bytes(4) + bytes(8) + (1000).to_bytes(4, "big") + (90_000).to_bytes(4, "big") + bytes(80))
+hidden_moov = _mp4_box(b"moov", mvhd_90 + b"hvc1")
+swallowed = (
+    _mp4_box(b"ftyp", b"isom" + bytes(8))
+    + (0).to_bytes(4, "big") + b"mdat" + bytes(20_000)
+    + hidden_moov
+)
+swallowed_path = Path(settings.recordings_dir) / "cam-hidden" / "2026-10-31_12-38-00.mp4"
+swallowed_path.parent.mkdir(parents=True, exist_ok=True)
+swallowed_path.write_bytes(swallowed)
+hidden_info = inspect_mp4(swallowed_path, swallowed_path.stat().st_size)
+check(
+    "moov after a zero-size mdat is still indexed",
+    hidden_info.finalized and hidden_info.duration_seconds == 90 and hidden_info.hevc,
+    str((hidden_info.finalized, hidden_info.duration_seconds, hidden_info.hevc, swallowed_path.stat().st_size)),
+)
+
+from api.services.hikvision_playback import coalesce_spans, parse_search_matches, playback_rtsp, search_body
+morning_start = datetime(2026, 10, 31, 12, 38, tzinfo=timezone.utc)
+morning_end = datetime(2026, 10, 31, 15, 3, tzinfo=timezone.utc)
+edge_url = playback_rtsp(hik_rtsp, None, None, morning_start, morning_end, "101")
+check(
+    "camera playback url uses the stored host",
+    bool(edge_url) and "10.0.0.30" in edge_url and "s3cret" in edge_url and "starttime=20261031T123800Z" in edge_url and "endtime=20261031T150300Z" in edge_url,
+    str(edge_url),
+)
+check("search body does not carry the password", b"s3cret" not in search_body("101", morning_start, morning_end, 0, "sentinel"))
+own_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<CMSearchResult xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <matchList><searchMatchItem>
+    <trackID>101</trackID>
+    <timeSpan><startTime>2026-10-31T12:38:00Z</startTime><endTime>2026-10-31T12:48:00Z</endTime></timeSpan>
+    <mediaSegmentDescriptor>
+      <playbackURI>rtsp://10.0.0.30/Streaming/tracks/101?starttime=20261031T123800Z&amp;endtime=20261031T124800Z&amp;name=ch01&amp;size=10</playbackURI>
+    </mediaSegmentDescriptor>
+  </searchMatchItem></matchList>
+</CMSearchResult>""".encode()
+foreign_xml = own_xml.replace(b"10.0.0.30", b"evil.example")
+check("camera search keeps its own span", len(parse_search_matches(own_xml, "10.0.0.30")) == 1)
+check("camera search drops a foreign playback host", parse_search_matches(foreign_xml, "10.0.0.30") == [])
+pieces = coalesce_spans([(morning_start, morning_end, "101")])
+piece_lengths = []
+for piece in pieces:
+    piece_start = datetime.fromisoformat(piece["start"].replace("Z", "+00:00"))
+    piece_end = datetime.fromisoformat(piece["end"].replace("Z", "+00:00"))
+    piece_lengths.append((piece_end - piece_start).total_seconds())
+check(
+    "camera morning is split into playable pieces without a playback url",
+    len(pieces) >= 2 and pieces[0]["start"].startswith("2026-10-31T12:38:00") and max(piece_lengths) <= 600 and "rtsp" not in str(pieces),
+    str(pieces[:2]),
+)
+snap_source = (ROOT / "api" / "routers" / "cameras.py").read_text()
+snap_fn = snap_source.split("async def get_camera_snapshot", 1)[1].split("async def move_camera_ptz", 1)[0]
+check("snapshot poll does not force a keyframe", "request_keyframe" not in snap_fn)
 check("person rule ignores cars", _rule_matches("person_detected", "car", []) is False)
 check("person rule matches person", _rule_matches("person_detected", "person", []) is True)
 check("empty object list does not match", _rule_matches("object", "truck", []) is False)
