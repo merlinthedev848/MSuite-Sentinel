@@ -460,41 +460,21 @@ RECORDINGS_DIR = Path(settings.recordings_dir).resolve()
 @app.get("/recordings/{camera_id}/{filename}")
 @app.get("/recordings/{camera_id}/export/{filename}")
 async def serve_recording(camera_id: str, filename: str, request: Request):
-    hot_dir = Path(settings.recordings_dir).resolve()
-    cold_env = os.getenv("COLD_STORAGE_PATH", "").strip()
-    cold_dir = Path(cold_env).resolve() if cold_env else None
-    export_dir = (Path(settings.export_path) if hasattr(settings, "export_path") else Path(settings.storage_path) / "exports").resolve()
+    from api.services.recorder import is_finalized_mp4, locate_recording, mp4_info_cached
 
-    candidates = [
-        hot_dir / camera_id / filename,
-        export_dir / filename,
-    ]
-    if cold_dir is not None:
-        candidates.insert(1, cold_dir / camera_id / filename)
-
-    fp = None
-    allowed_roots = [hot_dir, export_dir]
-    if cold_dir is not None:
-        allowed_roots.append(cold_dir)
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if any(base in resolved.parents for base in allowed_roots):
-            if resolved.exists() and resolved.is_file():
-                fp = resolved
-                break
-
+    fp = locate_recording(camera_id, filename)
     if not fp:
         raise HTTPException(404, "Recording not found")
 
     file_size = fp.stat().st_size
-    from api.services.recorder import is_finalized_cached, is_finalized_mp4, needs_browser_transcode
-    if file_size < 10240 or not is_finalized_cached(str(fp), fp.stat()):
+    info = mp4_info_cached(str(fp), fp.stat())
+    if file_size < 10240 or not info.finalized:
         raise HTTPException(409, "Recording segment is unfinalized or in-progress")
 
     # H.265 segments are not playable in Chrome. Serve a finished H.264 cache when
     # one exists. Otherwise start that cache in the background and stream from the
     # requested offset immediately, so the request is not held for a full transcode.
-    if needs_browser_transcode(fp, file_size):
+    if info.hevc:
         cache_dir = Path(settings.storage_path) / "transcoded_cache" / camera_id
         cached_fp = cache_dir / filename
         if cached_fp.exists() and cached_fp.stat().st_size >= 10240 and is_finalized_mp4(cached_fp):

@@ -226,7 +226,7 @@ const Playback: React.FC = () => {
         }
 
         // Initialize timeline and active file. A detection time seeks into that
-        // instant. A time that falls in a gap moves forward to the next segment.
+        // instant. A short gap moves to the next segment. A long gap stays empty.
         if (isMounted && recs.length > 0) {
           let targetMs = recs[recs.length - 1].startTimestamp;
           if (initTimeParam) {

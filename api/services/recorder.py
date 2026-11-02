@@ -367,7 +367,10 @@ def ensure_faststart(file_path: str | Path) -> Path:
     if not path.is_file() or moov_at_start(path):
         return path
     try:
-        if time.time() - path.stat().st_mtime < 3:
+        stat = path.stat()
+        # A multi-hour segment is already range-seekable. Remuxing it here would
+        # block the only API worker for the whole file.
+        if stat.st_size > 80 * 1024 * 1024 or time.time() - stat.st_mtime < 3:
             return path
     except OSError:
         return path
@@ -397,75 +400,152 @@ def ensure_faststart(file_path: str | Path) -> Path:
     return path
 
 
-def is_finalized_mp4(file_path: str | Path, stat_size: int | None = None) -> bool:
-    """
-    Check if an MP4 file has been finalized with a valid moov atom.
-    In-progress ffmpeg segments and aborted/corrupted recordings lack a moov atom
-    and cannot be decoded or played by web browsers.
+class Mp4Info:
+    """What a browser needs from one recording file. ``duration_seconds`` is None when the movie header is missing."""
+
+    __slots__ = ("finalized", "duration_seconds", "hevc")
+
+    def __init__(self, finalized: bool, duration_seconds: float | None, hevc: bool):
+        self.finalized = finalized
+        self.duration_seconds = duration_seconds
+        self.hevc = hevc
+
+
+_EMPTY_MP4 = Mp4Info(False, None, False)
+_MAX_SEGMENT_SECONDS = 24 * 3600
+_MOOV_READ_LIMIT = 2_000_000
+
+
+def _box_header(handle, offset: int, end: int) -> tuple[bytes, int, int] | None:
+    """Return (type, header_length, box_size) for the box at ``offset``, or None when it is truncated."""
+    if offset + 8 > end:
+        return None
+    handle.seek(offset)
+    header = handle.read(8)
+    if len(header) < 8:
+        return None
+    box_size = int.from_bytes(header[:4], "big")
+    box_type = header[4:8]
+    header_len = 8
+    if box_size == 1:
+        extra = handle.read(8)
+        if len(extra) < 8:
+            return None
+        box_size = int.from_bytes(extra, "big")
+        header_len = 16
+    elif box_size == 0:
+        box_size = end - offset
+    if box_size < header_len or offset + box_size > end:
+        return None
+    return box_type, header_len, box_size
+
+
+def _mvhd_seconds(payload: bytes) -> float | None:
+    if len(payload) < 20:
+        return None
+    version = payload[0]
+    if version == 0:
+        timescale = int.from_bytes(payload[12:16], "big")
+        duration = int.from_bytes(payload[16:20], "big")
+    elif version == 1 and len(payload) >= 32:
+        timescale = int.from_bytes(payload[20:24], "big")
+        duration = int.from_bytes(payload[24:32], "big")
+    else:
+        return None
+    if timescale <= 0 or duration <= 0:
+        return None
+    seconds = duration / timescale
+    if seconds > _MAX_SEGMENT_SECONDS:
+        return None
+    return seconds
+
+
+def _duration_in(payload: bytes) -> float | None:
+    """Movie duration from the first mvhd box inside an already-read moov payload."""
+    offset = 0
+    end = len(payload)
+    while offset + 8 <= end:
+        box_size = int.from_bytes(payload[offset:offset + 4], "big")
+        box_type = payload[offset + 4:offset + 8]
+        header_len = 8
+        if box_size == 1 and offset + 16 <= end:
+            box_size = int.from_bytes(payload[offset + 8:offset + 16], "big")
+            header_len = 16
+        if box_size < header_len or offset + box_size > end:
+            return None
+        if box_type == b"mvhd":
+            return _mvhd_seconds(payload[offset + header_len:offset + box_size])
+        offset += box_size
+    return None
+
+
+def inspect_mp4(file_path: str | Path, stat_size: int | None = None) -> Mp4Info:
+    """Walk top-level MP4 boxes. A moov atom anywhere in the file means it is finalized.
+
+    The old check only looked at the first 64KB and the last 256KB. A long Hikvision
+    segment keeps moov at the end, and that atom is larger than 256KB, so the fourcc
+    sits further back than the tail window. Those files were dropped from the timeline
+    even though the picture is in them.
     """
     try:
-        p = Path(file_path)
-        size = stat_size if stat_size is not None else p.stat().st_size
+        path = Path(file_path)
+        size = stat_size if stat_size is not None else path.stat().st_size
         if size < 10240:
-            return False
-        with open(p, "rb") as f:
-            # Faststart files place moov right after ftyp (within first 64KB)
-            header = f.read(min(size, 65536))
-            if b"moov" in header:
-                return True
-            # Standard MP4 files place moov at the end of the file
-            if size > 65536:
-                check_tail = min(size, 262144)
-                f.seek(size - check_tail)
-                tail = f.read(check_tail)
-                if b"moov" in tail:
-                    return True
+            return _EMPTY_MP4
+        with open(path, "rb") as handle:
+            offset = 0
+            moov_at = None
+            moov_size = 0
+            while offset + 8 <= size:
+                parsed = _box_header(handle, offset, size)
+                if parsed is None:
+                    break
+                box_type, header_len, box_size = parsed
+                if box_type == b"moov":
+                    moov_at = offset + header_len
+                    moov_size = box_size - header_len
+                    break
+                offset += box_size
+            if moov_at is None or moov_size <= 0:
+                return _EMPTY_MP4
+            handle.seek(moov_at)
+            moov = handle.read(min(moov_size, _MOOV_READ_LIMIT))
     except OSError:
-        return False
-    return False
+        return _EMPTY_MP4
+    duration = _duration_in(moov)
+    hevc = b"hvc1" in moov or b"hev1" in moov
+    return Mp4Info(True, duration, hevc)
+
+
+def is_finalized_mp4(file_path: str | Path, stat_size: int | None = None) -> bool:
+    """True when the MP4 has a moov atom and can be opened. An in-progress segment does not."""
+    return inspect_mp4(file_path, stat_size).finalized
 
 
 def needs_browser_transcode(file_path: str | Path, stat_size: int | None = None) -> bool:
-    """
-    Detect whether an MP4 recording uses H.265/HEVC (hvc1/hev1) or lacks H.264 (avc1),
-    requiring on-the-fly H.264 remux/transcode for universal browser playback.
-    """
-    try:
-        p = Path(file_path)
-        size = stat_size if stat_size is not None else p.stat().st_size
-        with open(p, "rb") as f:
-            header = f.read(min(size, 131072))
-            if b"hvc1" in header or b"hev1" in header:
-                return True
-            if b"avc1" in header:
-                return False
-            if size > 131072:
-                check_tail = min(size, 262144)
-                f.seek(size - check_tail)
-                tail = f.read(check_tail)
-                if b"hvc1" in tail or b"hev1" in tail:
-                    return True
-    except OSError:
-        return False
-    return False
+    """True when the recording is HEVC. Chrome cannot play that in a video element."""
+    return inspect_mp4(file_path, stat_size).hevc
 
 
-# (path, size, mtime_ns) -> finalized?  Size/mtime in the key invalidate entries as a file grows,
-# so each segment is only inspected once instead of on every listing / Range request.
-_FINALIZED_CACHE: dict[tuple[str, int, int], bool] = {}
-_FINALIZED_CACHE_MAX = 200_000
+# (path, size, mtime_ns) -> inspection. Size and mtime invalidate a file that is still growing.
+_MP4_CACHE: dict[tuple[str, int, int], Mp4Info] = {}
+_MP4_CACHE_MAX = 200_000
+
+
+def mp4_info_cached(path: str, st: os.stat_result) -> Mp4Info:
+    key = (path, st.st_size, st.st_mtime_ns)
+    hit = _MP4_CACHE.get(key)
+    if hit is not None:
+        return hit
+    result = inspect_mp4(path, st.st_size)
+    if len(_MP4_CACHE) >= _MP4_CACHE_MAX:
+        _MP4_CACHE.clear()
+    _MP4_CACHE[key] = result
+    return result
 
 
 def is_finalized_cached(path: str, st: os.stat_result) -> bool:
-    key = (path, st.st_size, st.st_mtime_ns)
-    hit = _FINALIZED_CACHE.get(key)
-    if hit is not None:
-        return hit
-    result = is_finalized_mp4(path, st.st_size)
-    if len(_FINALIZED_CACHE) >= _FINALIZED_CACHE_MAX:
-        _FINALIZED_CACHE.clear()  # hard bound on memory
-    _FINALIZED_CACHE[key] = result
-    return result
+    return mp4_info_cached(path, st).finalized
 
 
 _LIST_CACHE: dict[str, tuple[float, list]] = {}
@@ -486,84 +566,137 @@ def list_recordings(camera_id: str | None = None) -> list[dict]:
     return results
 
 
-def _scan_recordings(camera_id: str | None = None) -> list[dict]:
-    """Return a list of recording files across both hot and cold tiers, optionally filtered by camera."""
-    results = []
-    hot_base = RECORDINGS_BASE
-    cold_env = os.getenv("COLD_STORAGE_PATH", "").strip()
-    cold_base = Path(cold_env) if cold_env else None
+def _iter_camera_mp4s(cam_dir: Path):
+    """Yield mp4 files in the camera directory and in date folders under it."""
+    try:
+        for dirpath, dirnames, filenames in os.walk(cam_dir):
+            dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+            for name in filenames:
+                if name.startswith(".") or not name.endswith(".mp4"):
+                    continue
+                yield Path(dirpath) / name
+    except OSError:
+        return
 
-    bases = [b for b in (hot_base, cold_base) if b is not None and b.exists()]
+
+def _scan_recordings(camera_id: str | None = None) -> list[dict]:
+    """Return recording files from every configured root, including nested date folders."""
+    results = []
+    bases = [base for base in _recording_roots() if base.exists()]
     if not bases:
         return results
 
     now_utc = datetime.now(timezone.utc)
+    now_ts = now_utc.timestamp()
     seen_filenames = set()
     max_results = 50000
+    active_recorders = recorder_manager.status()
 
     for base in bases:
-        cam_dirs = [base / camera_id] if camera_id else [d for d in base.iterdir() if d.is_dir()]
+        try:
+            cam_dirs = [base / camera_id] if camera_id else [entry for entry in base.iterdir() if entry.is_dir()]
+        except OSError:
+            continue
         for cam_dir in cam_dirs:
-            if not cam_dir.exists():
+            if not cam_dir.is_dir():
                 continue
-            try:
-                entries = [entry for entry in os.scandir(cam_dir) if entry.is_file() and entry.name.endswith(".mp4")]
-            except OSError:
-                continue
+            files = list(_iter_camera_mp4s(cam_dir))
+            newest_mtime = None
+            for path in files:
+                try:
+                    mtime = path.stat().st_mtime
+                except OSError:
+                    continue
+                if newest_mtime is None or mtime > newest_mtime:
+                    newest_mtime = mtime
 
-            entries.sort(key=lambda x: x.name, reverse=True)
-
-            active_recorders = recorder_manager.status()
-            now_ts = now_utc.timestamp()
-
-            for i, entry in enumerate(entries):
-                unique_key = (cam_dir.name, entry.name)
+            for path in files:
+                unique_key = (cam_dir.name, path.name)
                 if unique_key in seen_filenames:
                     continue
-                seen_filenames.add(unique_key)
 
-                mtime = None
-                size_mb = 0.0
                 try:
-                    stat = entry.stat()
+                    stat = path.stat()
                     if stat.st_size < 10240:
                         continue
-                    # Always skip the newest segment if this camera is actively recording and the file was modified recently
-                    if i == 0 and active_recorders.get(cam_dir.name) == "recording" and (now_ts - stat.st_mtime) < (SEGMENT_DURATION + 15):
+                    writing = (
+                        active_recorders.get(cam_dir.name) == "recording"
+                        and newest_mtime is not None
+                        and stat.st_mtime == newest_mtime
+                        and (now_ts - stat.st_mtime) < (SEGMENT_DURATION + 15)
+                    )
+                    if writing:
                         continue
-                    # Skip unfinalized / actively-writing segments (cached per path+size+mtime)
-                    if not is_finalized_cached(entry.path, stat):
+                    info = mp4_info_cached(str(path), stat)
+                    if not info.finalized:
                         continue
                     mtime = stat.st_mtime
                     size_mb = round(stat.st_size / 1_048_576, 2)
                 except OSError:
                     continue
 
-                match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", entry.name)
+                seen_filenames.add(unique_key)
+                match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", path.name)
                 if match:
-                    y, m, d, hr, min, sec = match.groups()
+                    y, m, d, hr, minute, sec = match.groups()
                     try:
-                        dt = datetime(int(y), int(m), int(d), int(hr), int(min), int(sec), tzinfo=timezone.utc)
+                        dt = datetime(int(y), int(m), int(d), int(hr), int(minute), int(sec), tzinfo=timezone.utc)
                         created_at = dt.isoformat()
                     except ValueError:
-                        created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat() if mtime else now_utc.isoformat()
+                        created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
                 else:
-                    created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat() if mtime else now_utc.isoformat()
+                    created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 
+                duration = info.duration_seconds if info.duration_seconds and info.duration_seconds >= 0.5 else float(SEGMENT_DURATION)
                 results.append({
                     "camera_id": cam_dir.name,
-                    "filename": entry.name,
-                    "path": entry.path,
+                    "filename": path.name,
+                    "path": str(path),
                     "size_mb": size_mb,
                     "created_at": created_at,
-                    "duration_seconds": SEGMENT_DURATION,
-                    "url": f"/recordings/{cam_dir.name}/{entry.name}",
+                    "duration_seconds": round(duration, 3),
+                    "url": f"/recordings/{cam_dir.name}/{path.name}",
                 })
                 if len(results) >= max_results:
+                    results.sort(key=lambda item: item["created_at"])
                     return results
 
-    results.sort(key=lambda x: x["filename"], reverse=True)
+    results.sort(key=lambda item: item["created_at"])
     return results
+
+
+def locate_recording(camera_id: str, filename: str) -> Path | None:
+    """Find a segment by file name under a camera directory, including a date subfolder."""
+    from api.security import contained_path, safe_camera_id
+
+    try:
+        cid = safe_camera_id(camera_id)
+    except ValueError:
+        return None
+    if not filename or filename != Path(filename).name or not filename.endswith(".mp4") or filename.startswith("."):
+        return None
+
+    for root in _recording_roots():
+        if not root.exists():
+            continue
+        cam_dir = root / cid
+        if not cam_dir.is_dir():
+            continue
+        direct = cam_dir / filename
+        if direct.is_file() and contained_path(root, direct) is not None:
+            return direct
+        try:
+            for match in cam_dir.rglob(filename):
+                if match.is_file() and match.name == filename and contained_path(root, match) is not None:
+                    return match
+        except OSError:
+            continue
+
+    export_dir = Path(settings.export_path) if hasattr(settings, "export_path") else Path(settings.storage_path) / "exports"
+    exported = export_dir / filename
+    if exported.is_file() and contained_path(export_dir, exported) is not None:
+        return exported
+    return None
 
 
 
@@ -699,7 +832,7 @@ def purge_old_recordings(retention_days: int):
         for cam_dir in root.iterdir():
             if not cam_dir.is_dir():
                 continue
-            for f in cam_dir.glob("*.mp4"):
+            for f in cam_dir.rglob("*.mp4"):
                 try:
                     stat = f.stat()
                     file_time = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
