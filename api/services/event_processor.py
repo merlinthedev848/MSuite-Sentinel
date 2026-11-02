@@ -1,11 +1,11 @@
 import asyncio
+import base64
 import json
 import logging
 import os
 import time
 import uuid
 import aiofiles
-import httpx
 from aiomqtt import Client as MQTTClient
 from sqlalchemy import select
 from api.database import async_session_maker
@@ -19,17 +19,19 @@ from datetime import datetime, timezone
 logger = logging.getLogger("mView-EventProcessor")
 
 
-async def capture_snapshot(camera_id: str) -> bytes | None:
-    """Fetch recent frame snapshot from go2rtc via async HTTP request."""
-    url = f"{settings.go2rtc_url.rstrip('/')}/api/frame.jpeg?src={camera_id}"
+def event_jpeg_bytes(data: dict) -> bytes | None:
+    """Return the JPEG the detector attached, or None when it is missing or not a JPEG."""
+    raw = data.get("jpeg")
+    if not isinstance(raw, str) or not raw:
+        return None
     try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                return resp.content
+        blob = base64.b64decode(raw, validate=True)
     except Exception:
-        pass
-    return None
+        return None
+    if len(blob) < 32 or len(blob) > 2_000_000 or not blob.startswith(b"\xff\xd8"):
+        return None
+    return blob
+
 
 MQTT_BROKER = settings.mqtt_broker
 MQTT_PORT = settings.mqtt_port
@@ -193,7 +195,10 @@ async def _persist_detection(data: dict) -> None:
             return
         zones = camera.config.get("zones") if isinstance(camera.config, dict) else []
         zones = zones or []
-        has_rtsp = bool(camera.rtsp_url_sub or camera.rtsp_url_main)
+        rtsp_for_still = camera.rtsp_url_sub or camera.rtsp_url_main
+        still_user = camera.onvif_username
+        still_password = camera.onvif_password
+        has_rtsp = bool(rtsp_for_still)
         privacy_modes = (await session.execute(
             select(PrivacyMode).where(PrivacyMode.enabled == True)
         )).scalars().all()
@@ -206,16 +211,22 @@ async def _persist_detection(data: dict) -> None:
         rule_configs = [dict(rule.config or {}) for rule in rules]
 
     vlm_result = None
-    snapshot_bytes = None
+    # The list row is useless without the frame that triggered it. The detector
+    # already decoded that frame. The camera picture API is only the fallback.
+    snapshot_bytes = event_jpeg_bytes(data)
+    if snapshot_bytes is None and rtsp_for_still:
+        try:
+            from api.services.camera_picture import fetch_camera_jpeg
+            snapshot_bytes = await fetch_camera_jpeg(rtsp_for_still, still_user, still_password)
+        except Exception as err:
+            logger.warning("Event snapshot failed for %s: %s", camera_id, err)
     now_ts = time.time()
-    if has_rtsp and now_ts - _LAST_VLM_ANALYSIS.get(camera_id, 0) >= 10.0:
+    if snapshot_bytes and has_rtsp and now_ts - _LAST_VLM_ANALYSIS.get(camera_id, 0) >= 10.0:
         _LAST_VLM_ANALYSIS[camera_id] = now_ts
         detected_classes = [obj.get("class", "object") for obj in objects]
         try:
-            snapshot_bytes = await capture_snapshot(camera_id)
-            if snapshot_bytes:
-                from api.services.vlm_service import vlm_service
-                vlm_result = await vlm_service.analyze_frame(snapshot_bytes, detected_classes)
+            from api.services.vlm_service import vlm_service
+            vlm_result = await vlm_service.analyze_frame(snapshot_bytes, detected_classes)
         except Exception as err:
             logger.error("VLM snapshot analysis failed: %s", err)
 

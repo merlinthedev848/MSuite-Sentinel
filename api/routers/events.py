@@ -6,11 +6,12 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, not_, exists
 
+from api.config import settings
 from api.database import get_db, engine
 from api.models.ai import SemanticEvent as Event
 from api.models.operations import EventReview
@@ -187,12 +188,34 @@ async def get_event_analytics(db: AsyncSession = Depends(get_db)):
 
 @router.get("/{event_id}/thumbnail")
 async def get_event_thumbnail(event_id: str, db: AsyncSession = Depends(get_db)):
+    from api.models.camera import Camera
     from api.security import contained_path
+    from api.services.camera_picture import cached_camera_jpeg
+
     event = await db.get(Event, event_id)
-    thumb = contained_path(settings.thumbnail_path, event.thumbnail_path) if event and event.thumbnail_path else None
-    if thumb is None or not thumb.is_file():
-        raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return FileResponse(str(thumb), media_type="image/jpeg")
+    if event is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    thumb = contained_path(settings.thumbnail_path, event.thumbnail_path) if event.thumbnail_path else None
+    if thumb is not None and thumb.is_file():
+        return FileResponse(
+            str(thumb),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
+    # Rows saved before the detector attached a frame have no file. One shared
+    # still from that camera fills the box; it is not cached as the detection.
+    camera = await db.get(Camera, event.camera_id)
+    blob = None
+    if camera is not None:
+        blob = await cached_camera_jpeg(
+            str(camera.id),
+            camera.rtsp_url_sub or camera.rtsp_url_main,
+            camera.onvif_username,
+            camera.onvif_password,
+        )
+    if not blob:
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    return Response(content=blob, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/{event_id}")

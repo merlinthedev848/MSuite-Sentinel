@@ -128,8 +128,12 @@ class CameraRecorder:
         cmd = [
             "ffmpeg",
             "-loglevel", "warning",
-            "-analyzeduration", "10000000",
-            "-probesize", "10000000",
+            # The previous 10s/10MB probe held every new segment that long before
+            # the first picture was written. Audio is probed separately above.
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-analyzeduration", "0",
+            "-probesize", "32768",
             "-rtsp_transport", "tcp",
             "-timeout", "10000000",            # 10s socket I/O timeout -> exit on stalled feed
             "-i", self.rtsp_url,
@@ -339,6 +343,58 @@ class RecorderManager:
 
 
 recorder_manager = RecorderManager()
+
+
+def moov_at_start(file_path: str | Path) -> bool:
+    """True when the browser can start playback from the first bytes."""
+    try:
+        with open(file_path, "rb") as handle:
+            return b"moov" in handle.read(65536)
+    except OSError:
+        return False
+
+
+def ensure_faststart(file_path: str | Path) -> Path:
+    """Move moov to the front with a stream copy so a browser can range-seek immediately.
+
+    The segment muxer leaves moov at the end, so the player downloads the whole
+    minute before the first frame. This is a remux, not a transcode.
+    """
+    import subprocess
+    import time
+
+    path = Path(file_path)
+    if not path.is_file() or moov_at_start(path):
+        return path
+    try:
+        if time.time() - path.stat().st_mtime < 3:
+            return path
+    except OSError:
+        return path
+    tmp = path.with_name(f".{path.name}.faststart")
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(path),
+                "-c", "copy",
+                "-movflags", "+faststart",
+                str(tmp),
+            ],
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode == 0 and tmp.is_file() and tmp.stat().st_size >= 10240 and moov_at_start(tmp):
+            tmp.replace(path)
+        elif tmp.exists():
+            tmp.unlink()
+    except (OSError, subprocess.TimeoutExpired):
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    return path
 
 
 def is_finalized_mp4(file_path: str | Path, stat_size: int | None = None) -> bool:

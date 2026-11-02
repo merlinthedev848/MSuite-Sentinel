@@ -423,6 +423,10 @@ async def _iter_transcoded(src: Path, start: float):
 
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-fflags", "nobuffer",
+        "-flags", "low_delay",
+        "-probesize", "32768",
+        "-analyzeduration", "0",
         "-ss", f"{max(0.0, start):.3f}",
         "-i", str(src),
         "-map", "0:v:0", "-map", "0:a:0?",
@@ -497,8 +501,16 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
             return StreamingResponse(
                 _iter_transcoded(fp, _playback_offset(request)),
                 media_type="video/mp4",
-                headers={"Cache-Control": "no-store", "Accept-Ranges": "none"},
+                headers={
+                    "Cache-Control": "no-store",
+                    "Accept-Ranges": "none",
+                    "X-Playback-Mode": "mse",
+                },
             )
+
+    from api.services.recorder import ensure_faststart
+    fp = await asyncio.to_thread(ensure_faststart, fp)
+    file_size = fp.stat().st_size
 
     range_header = request.headers.get("range")
     if range_header:
