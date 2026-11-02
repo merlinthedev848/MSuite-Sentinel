@@ -10,6 +10,7 @@ export default defineConfig({
       '^/(auth|cameras|recordings|recordings-list|events|system|users|maps|ops-api|agent|automations|go2rtc|static)': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
+        ws: true,
       },
     }
   }
