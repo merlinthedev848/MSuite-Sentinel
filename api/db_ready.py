@@ -45,7 +45,23 @@ def is_auth_failure(exc: BaseException) -> bool:
     return "password authentication failed" in blob or "invalidpassword" in blob
 
 
+def use_ipv4_loopback(database_url: str) -> str:
+    """Postgres is published on 127.0.0.1 only. ``localhost`` can try ::1 and never return."""
+    parts = split_database_url(database_url)
+    if parts is None or str(parts["host"]).lower() not in {"localhost", "::1"}:
+        return database_url
+    from urllib.parse import quote
+
+    user = quote(str(parts["user"]), safe="")
+    password = str(parts["password"] or "")
+    auth = user if not password else f"{user}:{quote(password, safe='')}"
+    scheme = "postgresql+asyncpg" if database_url.startswith("postgresql+asyncpg") else "postgresql"
+    return f"{scheme}://{auth}@127.0.0.1:{parts['port']}/{parts['database']}"
+
+
 def is_connection_failure(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
     blob = f"{type(exc).__name__} {exc}".lower()
     needles = (
         "connection refused",
@@ -117,8 +133,9 @@ async def wait_for_database(engine: Any, database_url: str) -> None:
     last: Exception | None = None
     for attempt in range(1, 16):
         try:
-            async with engine.connect() as conn:
-                await conn.execute(text("SELECT 1"))
+            async with asyncio.timeout(8):
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
             if attempt > 1:
                 log.info("Database accepted the connection on attempt %s", attempt)
             return

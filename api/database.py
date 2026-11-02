@@ -2,8 +2,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import event, text
 from api.config import settings
+from api.db_ready import use_ipv4_loopback
 
-DATABASE_URL = settings.database_url
+DATABASE_URL = use_ipv4_loopback(settings.database_url)
 
 engine_kwargs = {
     "echo": settings.db_echo,

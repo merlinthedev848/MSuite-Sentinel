@@ -90,86 +90,89 @@ async def auto_update_worker():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Startup ──────────────────────────────────────────────────────
-    # Uvicorn binds 0.0.0.0:8000 only after this function reaches yield.
-    # Any exception before that exits the process and the port stays closed.
+    # Uvicorn does not accept connections until this function yields.
+    # Database work used to run first. A Postgres connect that never returned
+    # left the process up and port 8000 closed, so curl reported connection refused.
     log.info("=== mView Sentinel starting up ===")
     background_tasks: list[asyncio.Task] = []
-
     limits = httpx.Limits(max_keepalive_connections=50, max_connections=200)
     app.state.http_client = httpx.AsyncClient(timeout=15.0, limits=limits)
 
-    try:
-        from sqlalchemy import text, select
-        from api.db_ready import wait_for_database
+    async def _bring_up() -> None:
+        await asyncio.sleep(0)
+        try:
+            from sqlalchemy import text, select
+            from api.database import DATABASE_URL, async_session_maker as AsyncSessionLocal
+            from api.db_ready import wait_for_database
 
-        await wait_for_database(engine, settings.database_url)
-        async with engine.begin() as conn:
-            if engine.url.get_backend_name().startswith("postgresql"):
-                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            await conn.run_sync(Base.metadata.create_all)
-            from api.migrations import apply_migrations
-            await apply_migrations(conn)
+            await wait_for_database(engine, DATABASE_URL)
+            async with engine.begin() as conn:
+                if engine.url.get_backend_name().startswith("postgresql"):
+                    await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                await conn.run_sync(Base.metadata.create_all)
+                from api.migrations import apply_migrations
+                await apply_migrations(conn)
 
-        for directory in (
-            settings.export_path,
-            settings.thumbnail_path,
-            settings.snapshot_path,
-            settings.recordings_dir,
-            str(Path(settings.storage_path) / "maps"),
-        ):
-            try:
-                Path(directory).mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                log.warning("Storage directory %s is not writable: %s", directory, exc)
+            for directory in (
+                settings.export_path,
+                settings.thumbnail_path,
+                settings.snapshot_path,
+                settings.recordings_dir,
+                str(Path(settings.storage_path) / "maps"),
+            ):
+                try:
+                    Path(directory).mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    log.warning("Storage directory %s is not writable: %s", directory, exc)
 
-        from api.database import async_session_maker as AsyncSessionLocal
-        from api.routers.auth import get_password_hash
-        from api.secrets_bootstrap import ensure_admin_password
-        async with AsyncSessionLocal() as db:
-            existing_users = await db.execute(select(User.id).limit(1))
-            if existing_users.scalar_one_or_none() is None:
-                admin_password, password_path, created = ensure_admin_password()
-                db.add(User(
-                    username=settings.default_admin_username,
-                    hashed_password=get_password_hash(admin_password),
-                    role="admin",
-                    permissions=["live", "playback", "events", "settings", "operations"],
-                    token_version=0,
-                ))
-                await db.commit()
-                log.warning(
-                    "Created the first admin user '%s'. The password is in %s. The password admin is not accepted.",
-                    settings.default_admin_username,
-                    password_path,
-                )
-                if created:
-                    log.warning("Read that file once, store the password, and keep the file private.")
+            from api.routers.auth import get_password_hash
+            from api.secrets_bootstrap import ensure_admin_password
+            async with AsyncSessionLocal() as db:
+                existing_users = await db.execute(select(User.id).limit(1))
+                if existing_users.scalar_one_or_none() is None:
+                    admin_password, password_path, created = ensure_admin_password()
+                    db.add(User(
+                        username=settings.default_admin_username,
+                        hashed_password=get_password_hash(admin_password),
+                        role="admin",
+                        permissions=["live", "playback", "events", "settings", "operations"],
+                        token_version=0,
+                    ))
+                    await db.commit()
+                    log.warning(
+                        "Created the first admin user '%s'. The password is in %s. The password admin is not accepted.",
+                        settings.default_admin_username,
+                        password_path,
+                    )
+                    if created:
+                        log.warning("Read that file once, store the password, and keep the file private.")
 
-        from api.models.camera import Camera
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Camera))
-            cams = result.scalars().all()
-        await recorder_manager.sync_cameras(cams)
-        log.info("Recorder started for %s camera(s).", len(cams))
-        from api.services.ha_discovery import publish_camera_discovery
-        from api.services.storage_tier_migration import storage_migration_worker
-        from api.services.event_processor import process_mqtt_events, signal_watchdog
-        background_tasks = [
-            asyncio.create_task(local_snapshot_worker(), name="local-core-snapshot"),
-            asyncio.create_task(retention_worker(), name="retention-worker"),
-            asyncio.create_task(storage_migration_worker(), name="storage-migration-worker"),
-            asyncio.create_task(auto_update_worker(), name="auto-update-worker"),
-            asyncio.create_task(process_mqtt_events(), name="mqtt-event-processor"),
-            asyncio.create_task(signal_watchdog(), name="signal-watchdog"),
-            asyncio.create_task(publish_camera_discovery(cams), name="ha-discovery"),
-        ]
-    except Exception:
-        log.exception(
-            "Database startup failed. Port 8000 will still open so the dashboard can load. "
-            "Fix Postgres, then restart sentinel-api."
-        )
+            from api.models.camera import Camera
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(Camera))
+                cams = result.scalars().all()
+            await recorder_manager.sync_cameras(cams)
+            log.info("Recorder started for %s camera(s).", len(cams))
+            from api.services.ha_discovery import publish_camera_discovery
+            from api.services.storage_tier_migration import storage_migration_worker
+            from api.services.event_processor import process_mqtt_events, signal_watchdog
+            background_tasks.extend([
+                asyncio.create_task(local_snapshot_worker(), name="local-core-snapshot"),
+                asyncio.create_task(retention_worker(), name="retention-worker"),
+                asyncio.create_task(storage_migration_worker(), name="storage-migration-worker"),
+                asyncio.create_task(auto_update_worker(), name="auto-update-worker"),
+                asyncio.create_task(process_mqtt_events(), name="mqtt-event-processor"),
+                asyncio.create_task(signal_watchdog(), name="signal-watchdog"),
+                asyncio.create_task(publish_camera_discovery(cams), name="ha-discovery"),
+            ])
+            log.info("Database startup complete.")
+        except Exception:
+            log.exception(
+                "Database startup failed. The dashboard port stays open. "
+                "Fix Postgres, then restart sentinel-api."
+            )
 
+    background_tasks.append(asyncio.create_task(_bring_up(), name="sentinel-startup"))
     dist = Path(__file__).parent.parent / "web" / "dist"
     if dist.exists():
         idx = dist / "index.html"
@@ -181,9 +184,10 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        for task in background_tasks:
+        tasks = list(background_tasks)
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*background_tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         # ── Shutdown ─────────────────────────────────────────────────────
         recorder_manager.stop_all()

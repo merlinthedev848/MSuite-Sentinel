@@ -28,7 +28,7 @@ services:
     container_name: sentinel-api
     network_mode: host          # Host networking so ONVIF UDP multicast reaches LAN cameras
     entrypoint: ["/entrypoint-api.sh"]
-    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    command: ["python", "/serve_api.py"]
     environment:
       - SENTINEL_SECRETS_DIR=/run/sentinel/secrets
       - MQTT_BROKER=127.0.0.1
