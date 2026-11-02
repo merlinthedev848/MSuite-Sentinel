@@ -19,5 +19,7 @@ COPY docker/serve_api.py /serve_api.py
 RUN chmod 755 /entrypoint-api.sh /serve_api.py
 
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV SENTINEL_APP_ROOT=/app
 ENTRYPOINT ["/entrypoint-api.sh"]
 CMD ["python", "/serve_api.py"]

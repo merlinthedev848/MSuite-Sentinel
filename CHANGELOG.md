@@ -20,6 +20,7 @@ All notable changes, fixes, security enhancements, and performance optimizations
 
 ### Behavior
 - The API listens on `0.0.0.0:8000` before it talks to Postgres. A database connection that never returns no longer leaves the process up with the port closed.
+- `python /serve_api.py` adds `/app` to the module path before importing `api.main`. The launcher script lives outside that directory, so without this the process holds port 8000 and cannot load the app.
 - The detector container starts `/app/entrypoint.sh`, which is where the image copies the script. `/entrypoint.sh` is a link to that file, so a last-layer rebuild satisfies the old path without reinstalling the detector packages.
 - A repeat upgrade skips the API image, the detector image, or both when that image is already present and its inputs are unchanged. Changing detector dependencies does not rebuild the API image, and the API build context no longer includes `.git` or `vendor`. The fast-forward checkout, the Postgres readiness check, and the refusal of unsigned manifests stay in place.
 - Event search is keyword matching. Face recognition and ALPR return nothing until a real engine is configured.

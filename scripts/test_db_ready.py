@@ -79,6 +79,23 @@ def main() -> None:
         probe.close()
     finally:
         sock.close()
+
+    import importlib
+    import os
+    import tempfile
+    probe_root = tempfile.mkdtemp()
+    probe_pkg = Path(probe_root) / "sentinel_path_probe"
+    probe_pkg.mkdir()
+    (probe_pkg / "__init__.py").write_text("", encoding="utf-8")
+    (probe_pkg / "marker.py").write_text("OK = 1\n", encoding="utf-8")
+    added = module.ensure_app_path(probe_root)
+    assert added == os.path.abspath(probe_root)
+    assert sys.path[0] == added
+    marker = importlib.import_module("sentinel_path_probe.marker")
+    assert marker.OK == 1
+    launcher = (root / "docker/serve_api.py").read_text()
+    assert "app_dir=app_root" in launcher
+    assert "ENV PYTHONPATH=/app" in (root / "api/Dockerfile").read_text()
     print("db ready checks ok")
 
 
