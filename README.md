@@ -10,7 +10,9 @@
 
 ## Install
 
-Clone the repository and run `install.sh` from that checkout. The script fast-forwards `main` and starts Compose. It does not reset the worktree.
+Clone the repository and run `install.sh` from that checkout. The script fast-forwards `main` and starts Compose. It does not reset the worktree or apply the update manifest.
+
+A later run rebuilds the API image only when files under `api/`, `web/dist/`, or `docker/entrypoint-api.sh` changed, and rebuilds the detector image only when files under `detector/` changed. When those inputs and the local images are unchanged, it does not run `docker compose build`. Set `SENTINEL_REBUILD=1` to build both images anyway. The first run after this change still builds once so the stamp matches the images; a warm Docker cache reuses the PyTorch and OpenVINO layers.
 
 ```bash
 git clone https://github.com/merlinthedev848/MSuite-Sentinel.git /opt/mview-sentinel
