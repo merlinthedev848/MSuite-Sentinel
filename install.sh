@@ -179,6 +179,12 @@ echo -e "\n\033[1;32m===========================================================
 echo -e "\033[1;32m  mView Sentinel is starting\033[0m"
 echo -e "\033[1;32m=============================================================\033[0m"
 echo "  Dashboard:  http://127.0.0.1:8000"
+lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+if [ -n "${lan_ip:-}" ]; then
+    echo "  On the LAN: http://${lan_ip}:8000/"
+fi
+echo "  Confirm:    curl -fsS -m 5 -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:8000/"
+echo "              A healthy page is HTTP 200 within a few seconds. Connection refused means sentinel-api is not running."
 echo "  Health:     http://127.0.0.1:8000/system/health"
 echo "  Postgres, MQTT, and go2rtc listen on 127.0.0.1 only."
 echo "  The first admin password is a random value, not admin."
