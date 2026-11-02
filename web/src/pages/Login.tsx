@@ -56,8 +56,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             <ShieldCheck size={24} color="var(--cyan)" strokeWidth={2.5} />
           </div>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '1.1rem', fontWeight: 700, letterSpacing: '0.5px' }}>mView Sentinel</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--cyan)', fontWeight: 600, letterSpacing: '1.5px', textTransform: 'uppercase', marginTop: 4 }}>NVR Platform</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 600 }}>mView Sentinel</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--t3)', fontWeight: 500, marginTop: 4 }}>NVR platform</div>
           </div>
         </div>
 

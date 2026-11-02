@@ -682,7 +682,7 @@ const Playback: React.FC = () => {
                   <span className="playback-camera-name">{cam.name}</span>
                 </div>
                 {cam.status === 'recording' && (
-                  <span style={{ width: 8, height: 8, background: 'var(--red)', borderRadius: '50%', boxShadow: '0 0 8px var(--red)', display: 'inline-block' }} />
+                  <span style={{ width: 8, height: 8, background: 'var(--red)', borderRadius: '50%', display: 'inline-block' }} />
                 )}
               </div>
             ))

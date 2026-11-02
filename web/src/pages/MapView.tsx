@@ -167,7 +167,7 @@ const MapView = () => {
           onPointerLeave={() => setDraggingId(null)}
           style={{
             position: 'relative',
-            background: floorplan ? `url(${floorplan}) center/contain no-repeat, #050913` : '#050913',
+            background: floorplan ? `url(${floorplan}) center/contain no-repeat, #121418` : '#121418',
             border: '1px solid var(--surface-border-highlight)',
             display: 'flex',
             alignItems: 'center',
@@ -212,7 +212,7 @@ const MapView = () => {
                 left: '50%',
                 width: 150,
                 height: 150,
-                background: cam.alert ? 'radial-gradient(circle at center, rgba(244,63,94,0.4) 0%, transparent 70%)' : 'radial-gradient(circle at center, rgba(0,212,255,0.22) 0%, transparent 70%)',
+                background: cam.alert ? 'rgba(197, 139, 132, 0.16)' : 'rgba(168, 180, 194, 0.10)',
                 transform: `translate(-50%, -50%) rotate(${cam.rotation}deg)`,
                 clipPath: 'polygon(50% 50%, 0 0, 100% 0)',
                 transformOrigin: 'center',
@@ -221,16 +221,15 @@ const MapView = () => {
               <div style={{
                 width: 32,
                 height: 32,
-                background: cam.alert ? 'var(--red)' : cam.status === 'offline' ? 'var(--t3)' : 'var(--cyan)',
+                background: cam.alert ? 'var(--red)' : cam.status === 'offline' ? 'var(--t3)' : '#d7dce2',
                 borderRadius: '50%',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: cam.alert ? '0 0 20px rgba(244,63,94,0.75)' : '0 0 12px rgba(0,212,255,0.55)',
                 position: 'relative',
                 zIndex: 2,
               }}>
-                {cam.alert ? <AlertTriangle size={17} color="#050913" /> : <Crosshair size={17} color="#050913" />}
+                {cam.alert ? <AlertTriangle size={17} color="#17191d" /> : <Crosshair size={17} color="#17191d" />}
               </div>
               <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.82)', padding: '2px 6px', borderRadius: 4, fontSize: '0.72rem', marginTop: 4, whiteSpace: 'nowrap', color: '#fff' }}>
                 {cam.name}

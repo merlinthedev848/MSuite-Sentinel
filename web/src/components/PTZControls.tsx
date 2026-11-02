@@ -125,7 +125,7 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
         >
           <ArrowLeft size={18} />
         </button>
-        <button className="btn btn-outline" style={{ padding: '10px', background: 'rgba(0,212,255,0.1)', color: 'var(--color-primary)' }}>
+        <button className="btn btn-outline" style={{ padding: '10px', background: 'rgba(255,255,255,0.06)', color: 'var(--t1)' }}>
           <Crosshair size={18} />
         </button>
         <button 
@@ -191,8 +191,8 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
             style={{ 
               fontSize: '0.68rem', padding: '2px 8px', 
               background: tourActive ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)',
-              color: tourActive ? '#ef4444' : '#10b981',
-              border: `1px solid ${tourActive ? '#ef4444' : '#10b981'}`
+              color: tourActive ? 'var(--red)' : 'var(--green)',
+              border: `1px solid ${tourActive ? 'var(--red)' : 'var(--green)'}`
             }}
           >
             {tourActive ? <Pause size={10} /> : <Play size={10} />} {tourActive ? 'Stop Tour' : 'Guard Tour'}

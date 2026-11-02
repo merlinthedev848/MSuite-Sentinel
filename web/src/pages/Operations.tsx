@@ -211,7 +211,7 @@ const Operations: React.FC = () => {
     <div className="settings-shell">
       <div className="settings-topbar">
         <div>
-          <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--t1)' }}>Operations Center</div>
+          <div style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--t1)' }}>Operations Center</div>
           <div style={{ fontSize: '0.72rem', color: 'var(--t3)', marginTop: 2 }}>NVR import, reliability, privacy, rules, and event review</div>
         </div>
         <button className="btn btn-ghost" onClick={loadAll} disabled={loading}>
@@ -249,7 +249,7 @@ const Operations: React.FC = () => {
                 ].map(([label, value]) => (
                   <div className="card" key={label as string} style={{ padding: 18 }}>
                     <div className="card-title">{label as string}</div>
-                    <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--t1)', marginTop: 8 }}>{value as any}</div>
+                    <div style={{ fontSize: '1.6rem', fontWeight: 600, color: 'var(--t1)', marginTop: 10 }}>{value as any}</div>
                   </div>
                 ))}
               </div>
