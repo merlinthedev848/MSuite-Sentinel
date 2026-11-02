@@ -53,4 +53,5 @@ if [ -z "${GO2RTC_URL:-}" ]; then
   fi
 fi
 
+echo "sentinel-api entrypoint: launching $*" >&2
 exec "$@"

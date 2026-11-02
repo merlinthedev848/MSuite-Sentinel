@@ -13,6 +13,7 @@ from api.db_ready import (  # noqa: E402
     is_connection_failure,
     legacy_password_can_replace,
     split_database_url,
+    use_ipv4_loopback,
 )
 
 
@@ -49,10 +50,35 @@ def main() -> None:
     assert is_connection_failure(TimeoutError("connection timed out"))
     assert not is_connection_failure(Exception("password authentication failed"))
     assert split_database_url("sqlite+aiosqlite:///tmp/sentinel.db") is None
+    assert is_connection_failure(TimeoutError())
+    rewritten = use_ipv4_loopback(
+        "postgresql+asyncpg://sentinel:generated-secret-value@localhost:5432/sentinelnvr"
+    )
+    assert "@127.0.0.1:5432/" in rewritten
+    assert "generated-secret-value" in rewritten
+    assert use_ipv4_loopback(url) == url
 
-    source = Path(__file__).resolve().parents[1].joinpath("api/main.py").read_text()
-    assert "wait_for_database" in source
-    assert "API startup finished. Serving the dashboard on http://0.0.0.0:8000/" in source
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "api/main.py").read_text()
+    lifespan = source.split("async def lifespan", 1)[1].split("\napp = FastAPI", 1)[0]
+    assert lifespan.index("async def _bring_up") < lifespan.index("await wait_for_database")
+    assert lifespan.index("create_task(_bring_up()") < lifespan.index("\n        yield")
+    assert "await wait_for_database" in lifespan.split("async def _bring_up", 1)[1]
+    compose = (root / "docker-compose.yml").read_text()
+    assert 'command: ["python", "/serve_api.py"]' in compose
+    assert "--workers" not in compose.split("container_name: sentinel-api", 1)[1].split("container_name:", 1)[0]
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("serve_api", root / "docker/serve_api.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sock = module.listening_socket("127.0.0.1", 0)
+    try:
+        probe = __import__("socket").create_connection(("127.0.0.1", sock.getsockname()[1]), timeout=1)
+        probe.close()
+    finally:
+        sock.close()
     print("db ready checks ok")
 
 

@@ -116,7 +116,7 @@ decide() {
     fi
 }
 
-api_hash=$(hash_paths "$ROOT" .dockerignore api web/dist docker/entrypoint-api.sh)
+api_hash=$(hash_paths "$ROOT" .dockerignore api web/dist docker/entrypoint-api.sh docker/serve_api.py)
 detector_hash=$(hash_paths "$ROOT" detector)
 
 decide api "$api_hash" "$API_PRESENT"

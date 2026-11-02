@@ -184,7 +184,8 @@ if [ -n "${lan_ip:-}" ]; then
     echo "  On the LAN: http://${lan_ip}:8000/"
 fi
 echo "  Confirm:    curl -fsS -m 5 -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:8000/"
-echo "              A healthy page is HTTP 200 within a few seconds. Connection refused means sentinel-api is not running."
+echo "  Logs:       docker compose logs api --tail 100"
+echo "              Expect: sentinel-api listening on http://0.0.0.0:8000/"
 echo "  Health:     http://127.0.0.1:8000/system/health"
 echo "  Postgres, MQTT, and go2rtc listen on 127.0.0.1 only."
 echo "  The first admin password is a random value, not admin."

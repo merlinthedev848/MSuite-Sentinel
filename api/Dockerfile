@@ -15,7 +15,9 @@ RUN pip install uv && uv pip install --system --no-cache -r api/requirements.txt
 COPY api /app/api
 COPY web/dist /app/web/dist
 COPY docker/entrypoint-api.sh /entrypoint-api.sh
-RUN chmod 755 /entrypoint-api.sh
+COPY docker/serve_api.py /serve_api.py
+RUN chmod 755 /entrypoint-api.sh /serve_api.py
 
+ENV PYTHONUNBUFFERED=1
 ENTRYPOINT ["/entrypoint-api.sh"]
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["python", "/serve_api.py"]
