@@ -44,7 +44,7 @@ from api.config import settings
 from api.main import app
 from api.services.camera_picture import keyframe_url, picture_urls
 from api.services.event_processor import _rule_matches, event_jpeg_bytes
-from api.services.recorder import purge_old_recordings
+from api.services.recorder import browser_stream_sources, purge_old_recordings
 from api.services.storage_tier_migration import StorageTierMigration
 
 failures: list[str] = []
@@ -76,6 +76,13 @@ check(
     "hikvision keyframe matches the substream",
     keyframe_url(hik_rtsp) == "http://10.0.0.30/ISAPI/Streaming/channels/102/requestKeyFrame",
 )
+live_sources = browser_stream_sources("cam-1", hik_rtsp)
+check(
+    "live stream keeps the camera and adds an h264 track",
+    live_sources[0].startswith("rtsp://") and live_sources[1] == "ffmpeg:cam-1#video=h264" and "s3cret" not in live_sources[1],
+    str(live_sources),
+)
+check("unsafe stream name is not an ffmpeg source", browser_stream_sources("bad name", hik_rtsp) == [hik_rtsp])
 sample_jpeg = b"\xff\xd8" + b"\x00" * 40 + b"\xff\xd9"
 check("detector jpeg is stored", event_jpeg_bytes({"jpeg": __import__("base64").b64encode(sample_jpeg).decode()}) == sample_jpeg)
 check("non-jpeg payload is ignored", event_jpeg_bytes({"jpeg": __import__("base64").b64encode(b"not-a-jpeg-payload-at-all").decode()}) is None)
@@ -221,6 +228,13 @@ with TestClient(app, client=("127.0.0.1", 50000)) as client:
     time.sleep(0.4)
     check("openapi hidden", client.get("/openapi.json").status_code == 404)
     check("loopback cameras require auth", client.get("/cameras").status_code == 401)
+    live_socket_denied = False
+    try:
+        with client.websocket_connect("/go2rtc/api/ws?src=cam-1") as live_socket:
+            live_socket.receive_text()
+    except Exception:
+        live_socket_denied = True
+    check("live video socket requires a session", live_socket_denied)
     check("floorplans require auth", client.get("/static/maps/floor.png").status_code == 401)
     check("admin/admin rejected", client.post("/auth/login", data={"username": "admin", "password": "admin"}).status_code == 401)
     password = (SECRETS / "admin_password").read_text().strip()

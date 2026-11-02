@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSONResponse
@@ -305,6 +305,98 @@ app.include_router(maps.router)
 app.include_router(operations.router)
 app.include_router(agent.router)
 app.include_router(automations.router)
+
+
+def _go2rtc_ws_url(src: str) -> str:
+    base = settings.go2rtc_url.rstrip("/")
+    if base.startswith("https://"):
+        base = "wss://" + base[len("https://"):]
+    elif base.startswith("http://"):
+        base = "ws://" + base[len("http://"):]
+    else:
+        base = "ws://" + base
+    from urllib.parse import quote
+    return f"{base}/api/ws?src={quote(src, safe='')}"
+
+
+@app.websocket("/go2rtc/api/ws")
+async def proxy_go2rtc_mse(websocket: WebSocket):
+    """Proxy go2rtc's fMP4 WebSocket. That is the live stream; stream.mp4 is not.
+
+    HTTP stream.mp4 is one growing file and the player was abandoning it for
+    JPEG snapshots. This socket stays open and sends every frame. ICE is not
+    involved, so the localhost candidates that broke WebRTC do not apply.
+    """
+    from api.routers.auth import open_principal, read_session_token
+    from api.services.recorder import _STREAM_NAME
+
+    if websocket.query_params.get("token"):
+        await websocket.close(code=1008)
+        return
+    token = read_session_token(websocket)
+    principal = await open_principal(token)
+    if principal is None:
+        await websocket.close(code=1008)
+        return
+    if principal.get("role") != "admin":
+        permissions = set(principal.get("permissions") or [])
+        if not permissions.intersection({"live", "settings"}):
+            await websocket.close(code=1008)
+            return
+    src = websocket.query_params.get("src") or ""
+    if not _STREAM_NAME.fullmatch(src):
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    try:
+        import websockets
+        remote = await websockets.connect(
+            _go2rtc_ws_url(src),
+            open_timeout=5,
+            max_size=16 * 1024 * 1024,
+        )
+    except Exception:
+        await websocket.close(code=1011)
+        return
+
+    async def client_to_go2rtc():
+        while True:
+            message = await websocket.receive()
+            kind = message.get("type")
+            if kind == "websocket.disconnect":
+                break
+            if message.get("text") is not None:
+                await remote.send(message["text"])
+            elif message.get("bytes") is not None:
+                await remote.send(message["bytes"])
+
+    async def go2rtc_to_client():
+        async for message in remote:
+            if isinstance(message, str):
+                await websocket.send_text(message)
+            else:
+                await websocket.send_bytes(message)
+
+    tasks = {
+        asyncio.create_task(client_to_go2rtc()),
+        asyncio.create_task(go2rtc_to_client()),
+    }
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        for task in done:
+            task.result() if not task.cancelled() else None
+    except Exception:
+        for task in tasks:
+            task.cancel()
+    finally:
+        await remote.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @app.api_route("/go2rtc/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"])

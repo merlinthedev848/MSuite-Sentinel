@@ -222,17 +222,36 @@ async def _terminate_process(proc: "asyncio.subprocess.Process", grace: float = 
         pass
 
 
+_STREAM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$")
+
+
+def browser_stream_sources(name: str, rtsp_url: str) -> list[str]:
+    """RTSP copy, plus an H.264 track for the browser when the name is a stream id.
+
+    Chrome plays H.264 in MediaSource and does not play this camera's HEVC.
+    The extra source is only started when the copy has no H.264, so an H.264
+    camera is not transcoded. The ffmpeg source names the stream; it does not
+    repeat the camera password.
+    """
+    sources = [rtsp_url]
+    if name and _STREAM_NAME.fullmatch(name):
+        sources.append(f"ffmpeg:{name}#video=h264")
+    return sources
+
+
 async def register_go2rtc_stream(name: str, rtsp_url: str, attempts: int = 5, timeout: float = 3.0) -> bool:
     url = settings.go2rtc_url.rstrip('/')
     if rtsp_url.lower().startswith("rtsp://") and "transport=" not in rtsp_url and "#" not in rtsp_url:
         sep = "&" if "?" in rtsp_url else "?"
         rtsp_url = f"{rtsp_url}{sep}transport=tcp"
+    sources = browser_stream_sources(name, rtsp_url)
+    params = [("name", name)] + [("src", source) for source in sources]
     for attempt in range(1, max(1, attempts) + 1):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 res = await client.put(
                     f"{url}/api/streams",
-                    params={"name": name, "src": rtsp_url},
+                    params=params,
                 )
                 if res.status_code == 200:
                     logger.info(f"Successfully registered stream {name} in go2rtc (attempt {attempt})")
