@@ -24,7 +24,7 @@ services:
       - RECORDINGS_DIR=/mnt/storage/mview/recordings
       - SEGMENT_SECONDS=60
       - RECORD_SUBSTREAM_DEFAULT=true
-      - RECORD_VIDEO_CODEC=libx264
+      - RECORD_VIDEO_CODEC=copy
       - RECORD_VIDEO_CRF=30
       - RECORD_VIDEO_PRESET=veryfast
     volumes:

@@ -90,6 +90,40 @@ async def delete_camera(camera_id: str, db: AsyncSession = Depends(get_db)):
     return {"status": "deleted"}
 
 
+@router.post("/{camera_id}/ensure-stream")
+async def ensure_stream(camera_id: str, quality: str = "auto", db: AsyncSession = Depends(get_db)):
+    """Register this camera with go2rtc before the player connects.
+
+    The UI used to guess a stream name and start WebRTC immediately. If registration
+    was still retrying, or the name did not match, the player had nothing to show.
+    """
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = result.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(404, "Camera not found")
+    if not cam.rtsp_url_main and not cam.rtsp_url_sub:
+        raise HTTPException(400, "Camera has no RTSP stream configured")
+
+    from api.services.recorder import register_go2rtc_stream
+
+    jobs: list[tuple[str, str]] = []
+    if cam.rtsp_url_main:
+        jobs.append((cam.id, cam.rtsp_url_sub or cam.rtsp_url_main))
+        jobs.append((f"{cam.id}_main", cam.rtsp_url_main))
+    if cam.rtsp_url_sub:
+        jobs.append((f"{cam.id}_sub", cam.rtsp_url_sub))
+    registered = await asyncio.gather(*[
+        register_go2rtc_stream(name, url, attempts=1, timeout=2.0) for name, url in jobs
+    ])
+    if quality == "main" or not cam.rtsp_url_sub:
+        src = f"{cam.id}_main" if cam.rtsp_url_main else cam.id
+    elif quality == "sub":
+        src = f"{cam.id}_sub"
+    else:
+        src = f"{cam.id}_sub" if cam.rtsp_url_sub else f"{cam.id}_main"
+    return {"src": src, "streams": [name for name, _url in jobs], "registered": any(registered)}
+
+
 @router.get("/{camera_id}/snapshot")
 async def get_camera_snapshot(camera_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Camera).where(Camera.id == camera_id))

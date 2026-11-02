@@ -5,6 +5,7 @@ import {
   Search, Video, Download, Maximize2 
 } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
+import { resolveLoadedSeek, resolvePlaybackTarget, timelineMs } from '../lib/playbackSeek';
 
 const inputDate = (date: Date) => {
   const y = date.getFullYear();
@@ -66,6 +67,8 @@ const Playback: React.FC = () => {
   const [speedIndex, setSpeedIndex] = useState(1); // default '1x' (speeds[1])
   const [currentTimeMs, setCurrentTimeMs] = useState<number>(0);
   const [activeFile, setActiveFile] = useState<RecordingFile | null>(null);
+  const [clipOffset, setClipOffset] = useState(0);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [buffering, setBuffering] = useState(false);
   const [videoError, setVideoError] = useState('');
   const [jumpDate, setJumpDate] = useState(() => {
@@ -106,8 +109,8 @@ const Playback: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const pendingSeek = useRef<number | null>(null);
-  const failedSegmentsRef = useRef<Set<string>>(new Set());
-  const consecutiveErrorsRef = useRef<number>(0);
+  const timeBaseRef = useRef(0);
+  const retryCountRef = useRef(0);
   const errorTimeoutRef = useRef<number | null>(null);
 
   const showVideoMessage = (msg: string, durationMs: number = 4000) => {
@@ -152,8 +155,7 @@ const Playback: React.FC = () => {
   // ── 2. Load recordings and events for selected camera ──────────────
   useEffect(() => {
     if (!selectedCam) return;
-    failedSegmentsRef.current.clear();
-    consecutiveErrorsRef.current = 0;
+    retryCountRef.current = 0;
     setVideoError('');
     if (errorTimeoutRef.current) window.clearTimeout(errorTimeoutRef.current);
     let isMounted = true;
@@ -217,30 +219,25 @@ const Playback: React.FC = () => {
           if (isMounted) setEvents(evs);
         }
 
-        // Initialize timeline and active file
+        // Initialize timeline and active file. A detection time seeks into that
+        // instant. A time that falls in a gap moves forward to the next segment.
         if (isMounted && recs.length > 0) {
-          let targetTime = 0;
-          let targetFile = recs[recs.length - 1];
-
+          let targetMs = recs[recs.length - 1].startTimestamp;
           if (initTimeParam) {
             const t = new Date(initTimeParam).getTime();
-            if (!isNaN(t)) {
-              targetTime = t;
-              // Find the file containing this time
-              const f = recs.find(r => targetTime >= r.startTimestamp && targetTime < r.endTimestamp);
-              if (f) targetFile = f;
-            }
+            if (!isNaN(t)) targetMs = t;
           }
-
-          if (!targetTime) {
-            targetTime = targetFile.startTimestamp;
-          }
-
-          setActiveFile(targetFile);
-          setCurrentTimeMs(targetTime);
-          // Center the timeline window around the initial recording so it never pan-snaps on first play
-          setTimelineStart(targetTime - 3 * 3600 * 1000);
-          setTimelineEnd(targetTime + 3 * 3600 * 1000);
+          const resolved = resolvePlaybackTarget(recs, targetMs, true);
+          const file = resolved ? recs.find(item => item.url === resolved.url) : recs[recs.length - 1];
+          const seekMs = resolved?.seekMs ?? file!.startTimestamp;
+          const offset = Math.max(0, (seekMs - (file?.startTimestamp || seekMs)) / 1000);
+          pendingSeek.current = offset;
+          timeBaseRef.current = 0;
+          if (file) setActiveFile(file);
+          setClipOffset(offset);
+          setCurrentTimeMs(seekMs);
+          setTimelineStart(seekMs - 3 * 3600 * 1000);
+          setTimelineEnd(seekMs + 3 * 3600 * 1000);
         } else {
           setActiveFile(null);
           setRecordings([]);
@@ -253,7 +250,7 @@ const Playback: React.FC = () => {
 
     loadData();
     setIsPlaying(true);
-  }, [selectedCam]);
+  }, [selectedCam, initTimeParam]);
 
   // ── 3. Handle playback logic and seeks ─────────────────────────────
   useEffect(() => {
@@ -262,86 +259,64 @@ const Playback: React.FC = () => {
     }
   }, [speedIndex, activeFile]);
 
-  const seekToTime = (targetTimeMs: number, findNearest: boolean = false) => {
-    if (recordings.length === 0) return false;
+  const positionSec = () => timeBaseRef.current + (videoRef.current?.currentTime || 0);
 
-    // 1. Try to find the exact segment (excluding known failed segments)
-    let file = recordings.find(r => !failedSegmentsRef.current.has(r.url) && targetTimeMs >= r.startTimestamp && targetTimeMs <= r.endTimestamp);
-    let seekTargetMs = targetTimeMs;
-
-    // 2. Fallback to nearest segment if findNearest is true
-    if (!file && findNearest) {
-      let minDiff = Infinity;
-      let closestFile: RecordingFile | null = null;
-
-      for (const r of recordings) {
-        if (failedSegmentsRef.current.has(r.url)) continue;
-        const diffStart = Math.abs(r.startTimestamp - targetTimeMs);
-        const diffEnd = Math.abs(r.endTimestamp - targetTimeMs);
-        const minLocalDiff = Math.min(diffStart, diffEnd);
-
-        if (minLocalDiff < minDiff) {
-          minDiff = minLocalDiff;
-          closestFile = r;
-        }
-      }
-
-      if (closestFile) {
-        file = closestFile;
-        if (targetTimeMs < closestFile.startTimestamp) {
-          seekTargetMs = closestFile.startTimestamp;
-        } else {
-          seekTargetMs = closestFile.endTimestamp - 500; // 0.5s before end
-        }
+  const openClip = (file: RecordingFile, offsetSec: number) => {
+    const offset = Math.max(0, offsetSec);
+    const video = videoRef.current;
+    const sameFile = activeFile?.url === file.url && video;
+    timeBaseRef.current = 0;
+    pendingSeek.current = offset;
+    setCurrentTimeMs(file.startTimestamp + offset * 1000);
+    setVideoError('');
+    setBuffering(true);
+    setIsPlaying(true);
+    if (sameFile && video) {
+      const duration = video.duration;
+      if (Number.isFinite(duration) && duration > 1 && offset <= duration + 0.25) {
+        video.currentTime = Math.min(offset, Math.max(0, duration - 0.25));
+        return;
       }
     }
+    retryCountRef.current = 0;
+    setActiveFile(file);
+    setClipOffset(offset);
+  };
 
-    if (file) {
-      const offsetSeconds = (seekTargetMs - file.startTimestamp) / 1000;
-      consecutiveErrorsRef.current = 0;
-      setActiveFile(file);
-      setCurrentTimeMs(seekTargetMs);
-      setVideoError('');
-      setBuffering(true);
-
-      // Auto-center timeline if target is off-screen
-      if (seekTargetMs < timelineStart || seekTargetMs > timelineEnd) {
-        const span = timelineEnd - timelineStart;
-        setTimelineStart(seekTargetMs - span / 2);
-        setTimelineEnd(seekTargetMs + span / 2);
-      }
-
-      if (videoRef.current) {
-        if (videoRef.current.src.includes(file.url)) {
-          const duration = videoRef.current.duration;
-          if (!isNaN(duration) && duration > 0) {
-            const clampSeek = Math.min(offsetSeconds, duration > 0.5 ? duration - 0.5 : 0);
-            videoRef.current.currentTime = Math.max(0, clampSeek);
-          } else {
-            videoRef.current.currentTime = offsetSeconds;
-          }
-          videoRef.current.play().catch(() => {});
-          setIsPlaying(true);
-        } else {
-          pendingSeek.current = offsetSeconds;
-          setIsPlaying(true);
-        }
-      }
-      return true;
-    } else {
+  const seekToTime = (targetTimeMs: number, findNearest: boolean = false) => {
+    const resolved = resolvePlaybackTarget(recordings, targetTimeMs, findNearest);
+    if (!resolved) {
       setCurrentTimeMs(targetTimeMs);
       setVideoError('No recording segment covers the selected date and time.');
       return false;
     }
+    const file = recordings.find(item => item.url === resolved.url);
+    if (!file) return false;
+    const offset = Math.max(0, (resolved.seekMs - file.startTimestamp) / 1000);
+    if (resolved.seekMs < timelineStart || resolved.seekMs > timelineEnd) {
+      const span = timelineEnd - timelineStart;
+      setTimelineStart(resolved.seekMs - span / 2);
+      setTimelineEnd(resolved.seekMs + span / 2);
+    }
+    openClip(file, offset);
+    return true;
   };
 
   const handleTimeUpdate = () => {
     if (!videoRef.current || !activeFile) return;
-    const currentVideoTime = videoRef.current.currentTime;
-    const updatedTimeMs = activeFile.startTimestamp + currentVideoTime * 1000;
+    if (pendingSeek.current !== null) {
+      const want = pendingSeek.current;
+      const mediaTime = videoRef.current.currentTime;
+      const duration = videoRef.current.duration;
+      const arrived = Number.isFinite(duration) && duration > 1
+        ? Math.abs(mediaTime - Math.min(want, Math.max(0, duration - 0.25))) < 0.35
+        : mediaTime > 0.2;
+      if (!arrived) return;
+      pendingSeek.current = null;
+    }
+    const updatedTimeMs = timelineMs(activeFile.startTimestamp, timeBaseRef.current, videoRef.current.currentTime);
     setCurrentTimeMs(updatedTimeMs);
 
-    // Only gently advance timeline forward if the playing video reaches the right edge
     if (!isDragging && updatedTimeMs > timelineEnd - 15 * 1000 && updatedTimeMs <= timelineEnd + 60 * 1000) {
       const span = timelineEnd - timelineStart;
       setTimelineStart(updatedTimeMs - span * 0.5);
@@ -350,96 +325,73 @@ const Playback: React.FC = () => {
   };
 
   const handleLoadedMetadata = () => {
-    if (videoRef.current) {
-      videoRef.current.playbackRate = speeds[speedIndex];
+    const video = videoRef.current;
+    if (!video) return;
+    video.playbackRate = speeds[speedIndex];
+    const want = pendingSeek.current;
+    if (want !== null) {
+      const decision = resolveLoadedSeek(want, video.duration);
+      timeBaseRef.current = decision.timeBaseSec;
+      if (decision.mediaSeekSec === null || Math.abs(video.currentTime - decision.mediaSeekSec) < 0.2) {
+        pendingSeek.current = null;
+      } else {
+        video.currentTime = decision.mediaSeekSec;
+      }
     }
-    if (pendingSeek.current !== null && videoRef.current) {
-      const duration = videoRef.current.duration;
-      const clampSeek = Math.min(pendingSeek.current, duration > 0.5 ? duration - 0.5 : 0);
-      videoRef.current.currentTime = Math.max(0, clampSeek);
-      pendingSeek.current = null;
-    }
-    if (isPlaying && videoRef.current) {
-      videoRef.current.play().catch(err => {
-        if (err.name === 'NotAllowedError' && videoRef.current) {
-          videoRef.current.muted = true;
-          videoRef.current.play().catch(() => {});
+    if (isPlaying) {
+      video.play().catch(err => {
+        if (err.name === 'NotAllowedError') {
+          video.muted = true;
+          video.play().catch(() => {});
         }
       });
     }
+  };
+
+  const handleSeeked = () => {
+    pendingSeek.current = null;
   };
 
   const handleVideoEnded = () => {
     if (!activeFile) return;
     const currentIndex = recordings.findIndex(r => r.url === activeFile.url);
     if (currentIndex !== -1 && currentIndex < recordings.length - 1) {
-      let nextFile: RecordingFile | null = null;
-      for (let i = currentIndex + 1; i < recordings.length; i++) {
-        if (!failedSegmentsRef.current.has(recordings[i].url)) {
-          nextFile = recordings[i];
-          break;
-        }
-      }
-      if (nextFile) {
-        setActiveFile(nextFile);
-        setCurrentTimeMs(nextFile.startTimestamp);
-        pendingSeek.current = 0;
-        setIsPlaying(true);
-        return;
-      }
+      openClip(recordings[currentIndex + 1], 0);
+      return;
     }
     setIsPlaying(false);
   };
 
   const handleRecordingError = () => {
-    setBuffering(false);
     const mediaError = videoRef.current?.error;
-    // MEDIA_ERR_ABORTED (code 1): Normal abort when changing video source or seeking. Do not skip!
-    if (mediaError && mediaError.code === 1) {
+    if (mediaError && mediaError.code === 1) return;
+    if (activeFile && retryCountRef.current < 1) {
+      retryCountRef.current += 1;
+      pendingSeek.current = clipOffset;
+      timeBaseRef.current = 0;
+      setBuffering(true);
+      setRetryNonce(n => n + 1);
       return;
     }
-
-    if (activeFile) {
-      failedSegmentsRef.current.add(activeFile.url);
-      consecutiveErrorsRef.current += 1;
-
-      // Never cascade-scroll across the timeline! Allow at most 1 automatic fallback step.
-      if (consecutiveErrorsRef.current <= 1) {
-        const currentIndex = recordings.findIndex(r => r.url === activeFile.url);
-        let fallbackFile: RecordingFile | null = null;
-
-        // Prefer advancing forward to the next chronological segment; only step back 1 segment if we were on the very last segment
-        if (currentIndex !== -1 && currentIndex + 1 < recordings.length && !failedSegmentsRef.current.has(recordings[currentIndex + 1].url)) {
-          fallbackFile = recordings[currentIndex + 1];
-        } else if (currentIndex > 0 && !failedSegmentsRef.current.has(recordings[currentIndex - 1].url)) {
-          fallbackFile = recordings[currentIndex - 1];
-        }
-
-        if (fallbackFile) {
-          setActiveFile(fallbackFile);
-          setCurrentTimeMs(fallbackFile.startTimestamp);
-          pendingSeek.current = 0;
-          setIsPlaying(true);
-          return;
-        }
-      }
-    }
+    setBuffering(false);
     setIsPlaying(false);
-    showVideoMessage('Unable to play this recording segment in the browser.', 5000);
+    showVideoMessage('Unable to play this recording segment in the browser.', 0);
   };
 
   // ── 4. Transport Control Handlers ──────────────────────────────────
   useEffect(() => {
     if (!buffering || !activeFile) return;
     const timer = window.setTimeout(() => {
-      if (videoRef.current && (videoRef.current.error || videoRef.current.readyState === 0)) {
+      const video = videoRef.current;
+      if (!video) return;
+      if (video.error && video.error.code !== 1) {
         handleRecordingError();
-      } else {
-        setBuffering(false);
+        return;
       }
-    }, 12000);
+      if (video.readyState >= 2) setBuffering(false);
+    }, 20000);
     return () => window.clearTimeout(timer);
-  }, [buffering, activeFile?.url]);
+  }, [buffering, activeFile?.url, clipOffset, retryNonce]);
 
   const handlePlayPause = () => {
     if (!videoRef.current) return;
@@ -460,58 +412,46 @@ const Playback: React.FC = () => {
   };
 
   const handleRewind30 = () => {
-    if (!videoRef.current || !activeFile) return;
-    const targetTime = videoRef.current.currentTime - 30;
-    if (targetTime >= 0) {
-      videoRef.current.currentTime = targetTime;
+    if (!activeFile) return;
+    const target = positionSec() - 30;
+    if (target >= 0) {
+      openClip(activeFile, target);
+      return;
+    }
+    const currentIdx = recordings.findIndex(r => r.url === activeFile.url);
+    if (currentIdx > 0) {
+      const prevFile = recordings[currentIdx - 1];
+      const prevDur = Math.max(0.5, (prevFile.endTimestamp - prevFile.startTimestamp) / 1000);
+      openClip(prevFile, Math.max(0, prevDur + target));
     } else {
-      const currentIdx = recordings.findIndex(r => r.url === activeFile.url);
-      if (currentIdx > 0) {
-        const prevFile = recordings[currentIdx - 1];
-        setActiveFile(prevFile);
-        pendingSeek.current = 3600 + targetTime; 
-      } else {
-        videoRef.current.currentTime = 0;
-      }
+      openClip(activeFile, 0);
     }
   };
 
   const handleForward30 = () => {
-    if (!videoRef.current || !activeFile) return;
-    const targetTime = videoRef.current.currentTime + 30;
-    if (targetTime < videoRef.current.duration) {
-      videoRef.current.currentTime = targetTime;
-    } else {
-      const currentIdx = recordings.findIndex(r => r.url === activeFile.url);
-      if (currentIdx !== -1 && currentIdx < recordings.length - 1) {
-        const nextFile = recordings[currentIdx + 1];
-        const rolloverSecs = targetTime - videoRef.current.duration;
-        setActiveFile(nextFile);
-        pendingSeek.current = rolloverSecs;
-      }
+    if (!activeFile) return;
+    const dur = Math.max(0.5, (activeFile.endTimestamp - activeFile.startTimestamp) / 1000);
+    const target = positionSec() + 30;
+    if (target < dur) {
+      openClip(activeFile, target);
+      return;
+    }
+    const currentIdx = recordings.findIndex(r => r.url === activeFile.url);
+    if (currentIdx !== -1 && currentIdx < recordings.length - 1) {
+      openClip(recordings[currentIdx + 1], Math.max(0, target - dur));
     }
   };
 
   const handlePrevSegment = () => {
     if (!activeFile) return;
     const currentIdx = recordings.findIndex(r => r.url === activeFile.url);
-    if (currentIdx > 0) {
-      const prevFile = recordings[currentIdx - 1];
-      setActiveFile(prevFile);
-      setCurrentTimeMs(prevFile.startTimestamp);
-      pendingSeek.current = 0;
-    }
+    if (currentIdx > 0) openClip(recordings[currentIdx - 1], 0);
   };
 
   const handleNextSegment = () => {
     if (!activeFile) return;
     const currentIdx = recordings.findIndex(r => r.url === activeFile.url);
-    if (currentIdx !== -1 && currentIdx < recordings.length - 1) {
-      const nextFile = recordings[currentIdx + 1];
-      setActiveFile(nextFile);
-      setCurrentTimeMs(nextFile.startTimestamp);
-      pendingSeek.current = 0;
-    }
+    if (currentIdx !== -1 && currentIdx < recordings.length - 1) openClip(recordings[currentIdx + 1], 0);
   };
 
   // ── 5. Timeline Click & Drag & Zoom handlers ─────────────────────────
@@ -656,6 +596,12 @@ const Playback: React.FC = () => {
     return apiUrl(token ? `${url}${separator}token=${encodeURIComponent(token)}` : url);
   };
 
+  const withStart = (url: string, offsetSec: number) => {
+    const base = recordingSrc(url);
+    const joiner = base.includes('?') ? '&' : '?';
+    return `${base}${joiner}t=${offsetSec.toFixed(3)}`;
+  };
+
   const formatTimeHM = (timeMs: number) => {
     if (!timeMs) return '--:--';
     return new Date(timeMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -759,16 +705,16 @@ const Playback: React.FC = () => {
 
               <video
                 ref={videoRef}
-                key={activeFile.url}
-                src={recordingSrc(activeFile.url)}
+                key={`${activeFile.url}@${clipOffset.toFixed(3)}@${retryNonce}`}
+                src={withStart(activeFile.url, clipOffset)}
                 autoPlay
                 playsInline
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
+                onSeeked={handleSeeked}
                 onEnded={handleVideoEnded}
                 onWaiting={() => setBuffering(true)}
                 onPlaying={() => {
-                  consecutiveErrorsRef.current = 0;
                   setBuffering(false);
                   setIsPlaying(true);
                   setVideoError('');
@@ -975,9 +921,14 @@ const Playback: React.FC = () => {
 
               return (
                 <div 
-                  key={i}
+                  key={ev.id || i}
                   className={`timeline-event-pill ${evClass}`}
-                  style={{ left: `${left}%`, width: `${width}%` }}
+                  title={`${ev.object_class} ${formatTimeHMS(ev.timestampMs)}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    seekToTime(ev.timestampMs, true);
+                  }}
+                  style={{ left: `${left}%`, width: `${width}%`, cursor: 'pointer', zIndex: 6 }}
                 >
                   {/* Small tag indicator inside viewport on hover */}
                   <div className="timeline-event-tag">
