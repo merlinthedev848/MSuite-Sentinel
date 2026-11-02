@@ -457,16 +457,21 @@ def get_default_rtsp_paths(manufacturer: str | None, model: str | None, ip: str,
         )
 
 
+class AdoptCameraRequest(ONVIFDiscoveryResult):
+    username: str = ""
+    password: str = ""
+
+
 @router.post("/adopt", response_model=CameraResponse, status_code=201)
 async def adopt_camera(
-    data: ONVIFDiscoveryResult,
+    data: AdoptCameraRequest,
     request: Request,
-    username: str = "",
-    password: str = "",
     db: AsyncSession = Depends(get_db),
 ):
     """Probe a discovered device for RTSP streams, then save it."""
     _require_settings(request)
+    username = data.username
+    password = data.password
     import urllib.parse
     port = 80
     if data.onvif_endpoint:

@@ -390,11 +390,7 @@ const LiveView: React.FC = () => {
     }
   };
 
-  const recordingSrc = (url: string) => {
-    const token = localStorage.getItem('mview_token');
-    const separator = url.includes('?') ? '&' : '?';
-    return apiUrl(token ? `${url}${separator}token=${encodeURIComponent(token)}` : url);
-  };
+  const recordingSrc = (url: string) => apiUrl(url);
 
   const withStart = (url: string, offsetSec: number) => {
     const base = recordingSrc(url);

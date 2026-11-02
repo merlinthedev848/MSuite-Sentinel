@@ -51,7 +51,7 @@ async def get_events(
         stmt = exists().where(EventReview.event_id == Event.id).where(EventReview.verdict == 'reviewed')
         query = query.where(not_(stmt))
 
-    query = query.limit(min(limit, 500))
+    query = query.limit(min(max(limit, 1), 5000))
     result = await db.execute(query)
     events = result.all()
 

@@ -57,11 +57,6 @@ const Wallboard: React.FC = () => {
   const [cameras, setCameras] = useState<Camera[]>([]);
 
   useEffect(() => {
-    if (!localStorage.getItem('mview_token')) {
-      window.location.href = '/';
-      return;
-    }
-
     const loadCameras = async () => {
       try {
         const cams = await fetch(apiUrl('/cameras')).then(r => r.ok ? r.json() : []);

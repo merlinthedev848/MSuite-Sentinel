@@ -500,6 +500,7 @@ def _scan_recordings(camera_id: str | None = None) -> list[dict]:
                     "path": entry.path,
                     "size_mb": size_mb,
                     "created_at": created_at,
+                    "duration_seconds": SEGMENT_DURATION,
                     "url": f"/recordings/{cam_dir.name}/{entry.name}",
                 })
                 if len(results) >= max_results:

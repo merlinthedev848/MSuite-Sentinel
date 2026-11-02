@@ -5,7 +5,8 @@ from datetime import datetime, timezone, timedelta
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.responses import JSONResponse
+from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +20,7 @@ log = logging.getLogger("sentinel.auth")
 
 ALGORITHM = settings.jwt_algorithm
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.jwt_access_token_expire_minutes
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+SESSION_COOKIE = "sentinel_session"
 
 _LOGIN_WINDOW_SECONDS = 900
 _LOGIN_MAX_FAILURES = 8
@@ -74,6 +75,33 @@ def _clear_failures(key: str) -> None:
     _login_failures.pop(key, None)
 
 
+def read_session_token(request: Request) -> str | None:
+    """Bearer header or the HTTP-only session cookie. Query tokens are ignored."""
+    header = request.headers.get("authorization") or ""
+    if header.lower().startswith("bearer "):
+        token = header.split(" ", 1)[1].strip()
+        return token or None
+    cookie = request.cookies.get(SESSION_COOKIE)
+    return cookie or None
+
+
+def _cookie_secure(request: Request) -> bool:
+    forwarded = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    return request.url.scheme == "https" or forwarded == "https"
+
+
+def _attach_session_cookie(response: JSONResponse, request: Request, token: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        httponly=True,
+        secure=_cookie_secure(request),
+        samesite="lax",
+        path="/",
+    )
+
+
 def _service_principal(token: str) -> dict | None:
     expected = settings.service_token or ""
     if not expected or not hmac.compare_digest(token, expected):
@@ -113,10 +141,11 @@ async def principal_from_token(token: str, db: AsyncSession) -> dict | None:
 
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    principal = await principal_from_token(token, db)
+    token = read_session_token(request)
+    principal = await principal_from_token(token, db) if token else None
     if principal is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -161,7 +190,7 @@ async def login(
         },
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-    return {
+    response = JSONResponse({
         "access_token": access_token,
         "token_type": "bearer",
         "user": {
@@ -170,10 +199,33 @@ async def login(
             "role": user.role,
             "permissions": permissions,
         },
-    }
+    })
+    _attach_session_cookie(response, request, access_token)
+    return response
 
 
-async def open_principal(token: str) -> dict | None:
+@router.get("/me")
+async def current_session(user: dict = Depends(get_current_user)):
+    """Identify the signed-in user without reading a token from the page."""
+    return user
+
+
+@router.post("/logout")
+async def logout(request: Request):
+    response = JSONResponse({"status": "signed-out"})
+    response.delete_cookie(
+        SESSION_COOKIE,
+        path="/",
+        secure=_cookie_secure(request),
+        samesite="lax",
+        httponly=True,
+    )
+    return response
+
+
+async def open_principal(token: str | None) -> dict | None:
     """Authenticate a token with a short-lived database session."""
+    if not token:
+        return None
     async with async_session_maker() as db:
         return await principal_from_token(token, db)

@@ -3,7 +3,7 @@ import { ShieldCheck, Lock, User } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
 
 interface LoginProps {
-  onLogin: (token: string) => void;
+  onLogin: () => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
@@ -33,8 +33,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       });
 
       if (res.ok) {
-        const data = await res.json();
-        onLogin(data.access_token);
+        onLogin();
       } else {
         setError('Invalid username or password');
       }

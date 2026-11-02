@@ -18,7 +18,7 @@ cd /opt/mview-sentinel
 bash install.sh
 ```
 
-The dashboard is served by the API at `http://127.0.0.1:8000`. The first admin password is random and is written to the secrets volume. `admin` / `admin` does not sign in.
+The dashboard is served by the API at `http://127.0.0.1:8000` and signs in with an HTTP-only cookie. The first admin password is random and is written to the secrets volume. `admin` / `admin` does not sign in. The mobile app still uses the bearer token returned by login.
 
 Postgres, MQTT, and go2rtc bind to `127.0.0.1`. The API uses host networking so ONVIF discovery can see cameras, and it requires a login.
 

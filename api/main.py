@@ -24,20 +24,6 @@ from api.config import settings
 log = logging.getLogger("sentinel")
 
 
-def _ensure_user_token_version(sync_conn) -> None:
-    """Add token_version to databases created before password revocation existed."""
-    from sqlalchemy import inspect
-    from sqlalchemy import text as sql_text
-
-    inspector = inspect(sync_conn)
-    if "users" not in inspector.get_table_names():
-        return
-    columns = {column["name"] for column in inspector.get_columns("users")}
-    if "token_version" in columns:
-        return
-    sync_conn.execute(sql_text(
-        "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"
-    ))
 
 # Fetch JWT config directly for the middleware
 SECRET_KEY = settings.jwt_secret
@@ -117,11 +103,8 @@ async def lifespan(app: FastAPI):
         if engine.url.get_backend_name().startswith("postgresql"):
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_ensure_user_token_version)
-        await conn.execute(text(
-            'CREATE INDEX IF NOT EXISTS ix_semantic_events_camera_ts '
-            'ON semantic_events (camera_id, "timestamp" DESC)'
-        ))
+        from api.migrations import apply_migrations
+        await apply_migrations(conn)
 
     for directory in (
         settings.export_path,
@@ -250,6 +233,7 @@ async def auth_and_security_middleware(request: Request, call_next):
         ("/users", {"settings"}),
         ("/agent", {"operations", "settings"}),
         ("/automations", {"settings"}),
+        ("/static/maps", {"live", "playback", "settings"}),
     ]
 
 
@@ -268,25 +252,19 @@ async def auth_and_security_middleware(request: Request, call_next):
     is_public = (
         path.startswith("/system/health") or
         path.startswith("/auth/login") or
-        path.startswith("/static/") or
+        path.startswith("/auth/logout") or
+        (path.startswith("/static/") and not path.startswith("/static/maps")) or
         path.startswith("/assets/") or
         public_docs
     )
-    is_media_token_path = (
-        path.startswith("/recordings/") or
-        path.startswith("/go2rtc/") or
-        path.startswith("/system/") or
-        path.endswith("/snapshot") or
-        path.endswith("/thumbnail")
-    )
-
     if required and not is_public:
-        auth_header = request.headers.get("Authorization")
-        token = None
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-        elif is_media_token_path:
-            token = request.query_params.get("token")
+        from api.routers.auth import read_session_token
+        token = read_session_token(request)
+        if request.query_params.get("token"):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Session tokens in URLs are not accepted"},
+            )
 
         if not token:
             return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
@@ -471,19 +449,24 @@ RECORDINGS_DIR = Path(settings.recordings_dir).resolve()
 @app.get("/recordings/{camera_id}/export/{filename}")
 async def serve_recording(camera_id: str, filename: str, request: Request):
     hot_dir = Path(settings.recordings_dir).resolve()
-    cold_dir = Path(os.getenv("COLD_STORAGE_PATH", "/mnt/archive/mview/recordings")).resolve()
+    cold_env = os.getenv("COLD_STORAGE_PATH", "").strip()
+    cold_dir = Path(cold_env).resolve() if cold_env else None
     export_dir = (Path(settings.export_path) if hasattr(settings, "export_path") else Path(settings.storage_path) / "exports").resolve()
 
     candidates = [
         hot_dir / camera_id / filename,
-        cold_dir / camera_id / filename,
         export_dir / filename,
     ]
+    if cold_dir is not None:
+        candidates.insert(1, cold_dir / camera_id / filename)
 
     fp = None
+    allowed_roots = [hot_dir, export_dir]
+    if cold_dir is not None:
+        allowed_roots.append(cold_dir)
     for candidate in candidates:
         resolved = candidate.resolve()
-        if any(base in resolved.parents for base in (hot_dir, cold_dir, export_dir)):
+        if any(base in resolved.parents for base in allowed_roots):
             if resolved.exists() and resolved.is_file():
                 fp = resolved
                 break
