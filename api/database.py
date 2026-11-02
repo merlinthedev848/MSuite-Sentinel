@@ -14,6 +14,9 @@ if DATABASE_URL.startswith("postgresql"):
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
         pool_recycle=1800,
+        # asyncpg otherwise waits forever, and Uvicorn does not open port 8000
+        # until startup returns.
+        connect_args={"timeout": 10},
     )
 elif DATABASE_URL.startswith("sqlite"):
     engine_kwargs.update(
