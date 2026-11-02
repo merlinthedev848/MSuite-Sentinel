@@ -258,10 +258,12 @@ export const Dashboard = () => {
                       onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.025)'}
                     >
                       <div style={{ width: 48, height: 48, borderRadius: 6, overflow: 'hidden', flexShrink: 0, border: '1px solid var(--border)' }}>
-                        <img 
-                          src={apiUrl(`/events/${event.id}/thumbnail`)} 
-                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                        <img
+                          src={apiUrl(`/events/${event.id}/thumbnail`)}
+                          alt=""
+                          onLoad={(e) => { e.currentTarget.style.visibility = 'visible'; }}
+                          onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', visibility: 'visible' }}
                         />
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>

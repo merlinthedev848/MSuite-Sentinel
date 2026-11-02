@@ -51,9 +51,7 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
 }) => {
   const localVideo = useRef<HTMLVideoElement | null>(null);
   const [mode, setMode] = useState<LiveMode>('connecting');
-  const [streamName, setStreamName] = useState('');
   const [snapshotSrc, setSnapshotSrc] = useState('');
-  const [mjpegTries, setMjpegTries] = useState(0);
 
   useEffect(() => {
     onMode?.(mode);
@@ -77,8 +75,10 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
     };
 
     const run = async () => {
-      setMode('connecting');
-      let src = quality === 'sub' ? `${cameraId}_sub` : `${cameraId}_main`;
+      // A still goes up immediately. MSE replaces it when the first frame decodes.
+      // Staying on "connecting" left the tile blank for a whole GOP, about 5s.
+      setMode('snapshot');
+      let src = quality === 'main' ? `${cameraId}_main` : cameraId;
       try {
         const registered = await fetch(
           apiUrl(`/cameras/${encodeURIComponent(cameraId)}/ensure-stream?quality=${quality}`),
@@ -96,8 +96,6 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
         if ((err as Error).name === 'AbortError') return;
       }
       if (!active) return;
-      setStreamName(src);
-      setMjpegTries(0);
 
       try {
         const res = await fetch(go2rtcUrl(`/api/stream.mp4?src=${encodeURIComponent(src)}`), {
@@ -154,12 +152,13 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
               const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
               const start = sourceBuffer.buffered.start(0);
               const videoEl = localVideo.current;
-              if (end - start > 12 && !sourceBuffer.updating) {
-                sourceBuffer.remove(start, end - 8);
+              // Keep about a second. A multi-second backlog is what made live view late.
+              if (end - start > 2.5 && !sourceBuffer.updating) {
+                sourceBuffer.remove(start, end - 1);
                 return;
               }
-              if (videoEl && end - videoEl.currentTime > 1.5) {
-                videoEl.currentTime = Math.max(0, end - 0.3);
+              if (videoEl && end - videoEl.currentTime > 0.45) {
+                videoEl.currentTime = Math.max(0, end - 0.15);
               }
               if (videoEl && videoEl.readyState >= 2) {
                 sawFrame = true;
@@ -180,12 +179,23 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
             reader.cancel().catch(() => {});
             fail('mjpeg');
           }
-        }, 5000);
+        }, 2500);
+        let checkedCodec = false;
 
         while (active && preferMse) {
           const { done, value } = await reader.read();
           if (done) break;
           if (!value?.byteLength) continue;
+          if (!checkedCodec) {
+            checkedCodec = true;
+            const head = new TextDecoder('latin1').decode(value.subarray(0, Math.min(value.length, 4096)));
+            // Chrome MSE cannot play HEVC. A guessed avc1 mime would sit and buffer.
+            if (head.includes('hvc1') || head.includes('hev1')) {
+              reader.cancel().catch(() => {});
+              fail('mjpeg');
+              return;
+            }
+          }
           const buffer = new ArrayBuffer(value.byteLength);
           const copy = new Uint8Array(buffer);
           copy.set(value);
@@ -218,21 +228,19 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
   }, [cameraId, quality, paused]);
 
   useEffect(() => {
-    if (mode === 'mjpeg' && mjpegTries > 2) setMode('snapshot');
-  }, [mode, mjpegTries]);
-
-  useEffect(() => {
-    if (mode !== 'snapshot' && mode !== 'connecting') return;
+    if (mode !== 'connecting' && mode !== 'mjpeg' && mode !== 'snapshot') return;
     let stop = false;
     const tick = () => {
       if (stop) return;
+      // Camera picture API via the API. go2rtc's frame.jpeg waits for the next
+      // IDR and then starts ffmpeg, which is the multi-second blank tile.
       setSnapshotSrc(apiUrl(`/cameras/${encodeURIComponent(cameraId)}/snapshot?t=${Date.now()}`));
     };
     tick();
-    const timer = mode === 'snapshot' ? window.setInterval(tick, 2000) : 0;
+    const timer = window.setInterval(tick, 700);
     return () => {
       stop = true;
-      if (timer) window.clearInterval(timer);
+      window.clearInterval(timer);
     };
   }, [mode, cameraId]);
 
@@ -261,17 +269,9 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
         muted={muted}
         style={{ ...mediaStyle, opacity: mode === 'mse' ? 1 : 0 }}
       />
-      {mode === 'mjpeg' && streamName && mjpegTries <= 2 && (
+      {(mode === 'connecting' || mode === 'mjpeg' || mode === 'snapshot') && snapshotSrc && (
         <img
-          key={mjpegTries}
-          src={go2rtcUrl(`/api/stream.mjpeg?src=${encodeURIComponent(streamName)}`)}
-          alt=""
-          style={{ ...mediaStyle, position: 'absolute', inset: 0 }}
-          onError={() => setMjpegTries(tries => tries + 1)}
-        />
-      )}
-      {(mode === 'connecting' || mode === 'snapshot') && snapshotSrc && (
-        <img
+          key={snapshotSrc}
           src={snapshotSrc}
           alt=""
           style={{ ...mediaStyle, position: 'absolute', inset: 0 }}

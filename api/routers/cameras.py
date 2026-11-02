@@ -1,5 +1,6 @@
 import asyncio
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List
 
+from api.config import settings
 from api.database import get_db
 from api.models.camera import Camera
 from api.schemas.camera import CameraResponse, CameraCreate, CameraUpdate, ONVIFDiscoveryResult
@@ -136,24 +138,19 @@ async def ensure_stream(camera_id: str, quality: str = "auto", db: AsyncSession 
     if not cam.rtsp_url_main and not cam.rtsp_url_sub:
         raise HTTPException(400, "Camera has no RTSP stream configured")
 
+    from api.services.camera_picture import request_keyframe
     from api.services.recorder import register_go2rtc_stream
 
-    jobs: list[tuple[str, str]] = []
-    if cam.rtsp_url_main:
-        jobs.append((cam.id, cam.rtsp_url_sub or cam.rtsp_url_main))
-        jobs.append((f"{cam.id}_main", cam.rtsp_url_main))
-    if cam.rtsp_url_sub:
-        jobs.append((f"{cam.id}_sub", cam.rtsp_url_sub))
-    registered = await asyncio.gather(*[
-        register_go2rtc_stream(name, url, attempts=1, timeout=2.0) for name, url in jobs
-    ])
-    if quality == "main" or not cam.rtsp_url_sub:
-        src = f"{cam.id}_main" if cam.rtsp_url_main else cam.id
-    elif quality == "sub":
-        src = f"{cam.id}_sub"
+    # The recorder already keeps `cam.id` open on the substream. Opening the
+    # main stream as well, just because the dashboard loaded, makes the camera
+    # spend the next several seconds bringing up another RTSP session.
+    if quality == "main" and cam.rtsp_url_main:
+        src, stream_url = f"{cam.id}_main", cam.rtsp_url_main
     else:
-        src = f"{cam.id}_sub" if cam.rtsp_url_sub else f"{cam.id}_main"
-    return {"src": src, "streams": [name for name, _url in jobs], "registered": any(registered)}
+        src, stream_url = cam.id, (cam.rtsp_url_sub or cam.rtsp_url_main)
+    registered = await register_go2rtc_stream(src, stream_url, attempts=1, timeout=1.5)
+    asyncio.create_task(request_keyframe(stream_url, cam.onvif_username, cam.onvif_password))
+    return {"src": src, "streams": [src], "registered": bool(registered)}
 
 
 @router.get("/{camera_id}/snapshot")
@@ -167,49 +164,27 @@ async def get_camera_snapshot(camera_id: str, db: AsyncSession = Depends(get_db)
     if not rtsp_url:
         raise HTTPException(400, "Camera has no RTSP stream configured")
 
-    cmd = [
-        "ffmpeg",
-        "-loglevel", "error",
-        "-rtsp_transport", "tcp",
-        "-i", rtsp_url,
-        "-frames:v", "1",
-        "-q:v", "4",
-        "-f", "image2pipe",
-        "-vcodec", "mjpeg",
-        "-",
-    ]
-    proc = None
+    from api.services.camera_picture import fetch_camera_jpeg, request_keyframe
+
+    # The picture API does not wait for the next IDR. The keyframe request is
+    # what lets the video element take over without sitting out a 5s GOP.
+    asyncio.create_task(request_keyframe(rtsp_url, cam.onvif_username, cam.onvif_password))
+    jpeg = await fetch_camera_jpeg(rtsp_url, cam.onvif_username, cam.onvif_password)
+    if jpeg:
+        return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    # Already-open go2rtc stream. One name only: trying every alias stacks timeouts.
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8.0)
-    except asyncio.TimeoutError:
-        if proc:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-        raise HTTPException(504, "Snapshot timed out")
-    except FileNotFoundError:
-        raise HTTPException(500, "ffmpeg is not available in the API container")
-    except Exception as e:
-        if proc:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-        raise HTTPException(500, f"Snapshot failed: {e}")
-
-    if proc.returncode != 0 or not stdout:
-        detail = stderr.decode(errors="replace")[-240:] if stderr else "Snapshot capture failed"
-        raise HTTPException(502, detail)
-
-    return Response(content=stdout, media_type="image/jpeg")
+        async with httpx.AsyncClient(timeout=1.2) as client:
+            resp = await client.get(
+                f"{settings.go2rtc_url.rstrip('/')}/api/frame.jpeg",
+                params={"src": camera_id},
+            )
+        if resp.status_code == 200 and resp.content.startswith(b"\xff\xd8") and len(resp.content) > 32:
+            return Response(content=resp.content, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    except Exception:
+        pass
+    raise HTTPException(502, "Snapshot capture failed")
 
 
 @router.post("/{camera_id}/ptz/move")

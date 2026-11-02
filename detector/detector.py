@@ -1,16 +1,22 @@
-import cv2
+import base64
 import json
 import time
 import os
 import logging
+
+# Read before OpenCV opens the capture. The default 5s probe is what made the
+# first decoded frame late; the socket timeout is separate from that probe.
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    "rtsp_transport;tcp|timeout;5000000|analyzeduration;0|probesize;32768",
+)
+
+import cv2
 from ultralytics import YOLO
 import paho.mqtt.client as mqtt
 from semantic_search import semantic_engine
 from motion import motion_gate
 from PIL import Image
-
-# Force TCP RTSP transport and an 8-second socket timeout for OpenCV FFmpeg capture
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|timeout;8000000")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("mView-Detector")
@@ -32,6 +38,35 @@ DETECT_CLASSES = [
 
 CAMERA_ID = os.getenv("CAMERA_ID", "")
 STREAM_URL = os.getenv("STREAM_URL", "")
+
+
+def _detection_jpeg(frame) -> str | None:
+    """JPEG of the frame YOLO just scored, small enough for one MQTT message."""
+    try:
+        height, width = frame.shape[:2]
+        scale = 640 / max(width, height)
+        image = frame
+        if scale < 1:
+            image = cv2.resize(
+                frame,
+                (max(1, int(width * scale)), max(1, int(height * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+        if not ok:
+            return None
+        blob = encoded.tobytes()
+        if len(blob) > 180_000:
+            ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 40])
+            if not ok:
+                return None
+            blob = encoded.tobytes()
+        if len(blob) > 180_000 or not blob.startswith(b"\xff\xd8"):
+            return None
+        return base64.b64encode(blob).decode("ascii")
+    except Exception as exc:
+        logger.warning("Could not encode detection JPEG: %s", exc)
+        return None
 
 
 def _service_token() -> str:
@@ -223,7 +258,7 @@ class DetectorNode:
                             detections[-1]["embedding"] = embedding_list
 
                 if detections:
-                    self.publish_event(detections, frame_w, frame_h, target_camera_id)
+                    self.publish_event(detections, frame, frame_w, frame_h, target_camera_id)
         finally:
             cap.release()
 
@@ -250,7 +285,7 @@ class DetectorNode:
             logger.warning("Heartbeat publish failed: %s", exc)
             self.mqtt_client = None
 
-    def publish_event(self, detections, frame_w, frame_h, camera_id="default_cam"):
+    def publish_event(self, detections, frame, frame_w, frame_h, camera_id="default_cam"):
         self._ensure_mqtt()
         cam_id = camera_id or CAMERA_ID or "default_cam"
         now = time.time()
@@ -277,16 +312,25 @@ class DetectorNode:
             "camera_id": cam_id,
             "timestamp": now,
             "frame": {"width": frame_w, "height": frame_h},
-            "objects": publishable
+            "objects": publishable,
         }
+        jpeg = _detection_jpeg(frame)
+        if jpeg:
+            payload["jpeg"] = jpeg
         topic = f"sentinel/events/{cam_id}"
         if self.mqtt_client:
+            body = json.dumps(payload, separators=(",", ":"))
             try:
-                self.mqtt_client.publish(topic, json.dumps(payload, separators=(",", ":")), qos=1)
+                self.mqtt_client.publish(topic, body, qos=1)
                 logger.info(f"Published event with {len(publishable)} objects to {topic}")
             except Exception as e:
-                logger.warning(f"MQTT publish failed ({e}); resetting client.")
-                self.mqtt_client = None
+                logger.warning(f"MQTT publish failed ({e}); retrying without the frame.")
+                payload.pop("jpeg", None)
+                try:
+                    self.mqtt_client.publish(topic, json.dumps(payload, separators=(",", ":")), qos=1)
+                except Exception as again:
+                    logger.warning(f"MQTT publish failed ({again}); resetting client.")
+                    self.mqtt_client = None
 
 
 if __name__ == "__main__":

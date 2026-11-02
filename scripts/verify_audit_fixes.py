@@ -42,7 +42,8 @@ from jose import jwt
 
 from api.config import settings
 from api.main import app
-from api.services.event_processor import _rule_matches
+from api.services.camera_picture import keyframe_url, picture_urls
+from api.services.event_processor import _rule_matches, event_jpeg_bytes
 from api.services.recorder import purge_old_recordings
 from api.services.storage_tier_migration import StorageTierMigration
 
@@ -64,6 +65,20 @@ migration = StorageTierMigration()
 check("cold storage disabled by default", migration.cold_storage_dir is None)
 check("cold migration does not create /mnt/archive", migration.run_migration().get("enabled") is False and not Path("/mnt/archive/mview/recordings").exists())
 
+hik_rtsp = "rtsp://admin:s3cret@10.0.0.30:554/Streaming/Channels/102"
+hik_pictures = picture_urls(hik_rtsp)
+check(
+    "hikvision picture url has no password",
+    hik_pictures[0] == "http://10.0.0.30/ISAPI/Streaming/channels/102/picture" and "s3cret" not in " ".join(hik_pictures),
+    str(hik_pictures),
+)
+check(
+    "hikvision keyframe matches the substream",
+    keyframe_url(hik_rtsp) == "http://10.0.0.30/ISAPI/Streaming/channels/102/requestKeyFrame",
+)
+sample_jpeg = b"\xff\xd8" + b"\x00" * 40 + b"\xff\xd9"
+check("detector jpeg is stored", event_jpeg_bytes({"jpeg": __import__("base64").b64encode(sample_jpeg).decode()}) == sample_jpeg)
+check("non-jpeg payload is ignored", event_jpeg_bytes({"jpeg": __import__("base64").b64encode(b"not-a-jpeg-payload-at-all").decode()}) is None)
 check("person rule ignores cars", _rule_matches("person_detected", "car", []) is False)
 check("person rule matches person", _rule_matches("person_detected", "person", []) is True)
 check("empty object list does not match", _rule_matches("object", "truck", []) is False)
@@ -170,6 +185,20 @@ with TestClient(app, client=("127.0.0.1", 50000)) as client:
     update = client.post("/system/updates/install", headers=admin)
     check("unsigned update refused", update.status_code == 400 and "git reset" not in update.text.lower())
     cam_id = body["id"]
+    stored = b"\xff\xd8" + b"\x11" * 48 + b"\xff\xd9"
+    stored_path = Path(settings.thumbnail_path) / "person-row.jpg"
+    stored_path.parent.mkdir(parents=True, exist_ok=True)
+    stored_path.write_bytes(stored)
+    import sqlite3
+    thumb_db = sqlite3.connect(BASE / "sentinel.db")
+    thumb_db.execute(
+        "INSERT INTO semantic_events (id, camera_id, object_class, confidence, thumbnail_path, timestamp) VALUES (?,?,?,?,?,?)",
+        ("person-row", cam_id, "person", 0.91, str(stored_path), "2026-11-02 12:00:00"),
+    )
+    thumb_db.commit()
+    thumb_db.close()
+    shot = client.get("/events/person-row/thumbnail", headers=admin)
+    check("stored person thumbnail is served", shot.status_code == 200 and shot.content.startswith(b"\xff\xd8"), f"{shot.status_code} {shot.headers.get('content-type')}")
     clip = Path(settings.recordings_dir) / cam_id / "2020-01-01_00-00-00.mp4"
     clip.parent.mkdir(parents=True, exist_ok=True)
     clip.write_bytes(b"\x00" * 8000 + b"ftypmoov" + b"\x00" * 8000)
