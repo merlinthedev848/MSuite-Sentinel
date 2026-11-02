@@ -95,6 +95,14 @@ class LocalCore:
             events = [_event_payload(event) for event in events_result.scalars().all()]
 
         health = await asyncio.to_thread(self._health_payload)
+        try:
+            from api.services.probes import dependency_status
+            health.update(await dependency_status())
+            health.setdefault("network", {})
+            health["network"]["ok"] = health.get("status") == "online"
+        except Exception as exc:
+            logger.warning("Dependency probe failed: %s", exc)
+            health["status"] = "degraded"
         recording_storage = None
         now = time.monotonic()
         if include_storage or now - self._last_storage_refresh > 60:
@@ -174,13 +182,14 @@ def sse_pack(event: dict[str, Any]) -> str:
 
 
 def _camera_payload(camera: Camera) -> dict[str, Any]:
+    from api.security import mask_rtsp_url
     return {
         "id": camera.id,
         "name": camera.name,
         "status": camera.status,
         "enabled": camera.enabled,
-        "rtsp_url_main": camera.rtsp_url_main,
-        "rtsp_url_sub": camera.rtsp_url_sub,
+        "rtsp_url_main": mask_rtsp_url(camera.rtsp_url_main),
+        "rtsp_url_sub": mask_rtsp_url(camera.rtsp_url_sub),
         "manufacturer": camera.manufacturer,
         "model": camera.model,
         "resolution": camera.resolution,

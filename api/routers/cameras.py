@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,8 +13,35 @@ from api.schemas.camera import CameraResponse, CameraCreate, CameraUpdate, ONVIF
 from api.services.onvif_service import onvif_service
 from api.services.recorder import recorder_manager
 from api.services.local_core import local_core
+from api.security import can_view_secrets, is_masked_rtsp, is_masked_secret, mask_rtsp_url, mask_secret
 
 router = APIRouter(prefix="/cameras", tags=["Cameras"])
+
+
+def _require_settings(request: Request) -> None:
+    user = getattr(request.state, "user", None) or {}
+    if user.get("role") == "admin" or "settings" in set(user.get("permissions") or []):
+        return
+    raise HTTPException(403, "Settings permission required")
+
+
+def _present_camera(cam: Camera, user: dict | None) -> dict:
+    payload = CameraResponse.model_validate(cam).model_dump(mode="json")
+    if can_view_secrets(user):
+        return payload
+    payload["onvif_password"] = mask_secret(payload.get("onvif_password"))
+    payload["rtsp_url_main"] = mask_rtsp_url(payload.get("rtsp_url_main"))
+    payload["rtsp_url_sub"] = mask_rtsp_url(payload.get("rtsp_url_sub"))
+    return payload
+
+
+def _ignore_masked_updates(data: dict) -> dict:
+    if is_masked_secret(data.get("onvif_password")):
+        data.pop("onvif_password", None)
+    for key in ("rtsp_url_main", "rtsp_url_sub"):
+        if is_masked_rtsp(data.get(key)):
+            data.pop(key, None)
+    return data
 
 
 async def _refresh_recorder(db: AsyncSession):
@@ -29,46 +56,51 @@ class PTZMove(BaseModel):
 
 
 @router.get("", response_model=List[CameraResponse])
-async def get_cameras(db: AsyncSession = Depends(get_db)):
+async def get_cameras(request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Camera))
     cams = result.scalars().all()
     
     # Inject active recording status dynamically
     recording_ids = recorder_manager.status()
+    user = getattr(request.state, "user", None)
+    presented = []
     for cam in cams:
-        if cam.id in recording_ids:
+        if cam.id in recording_ids and recording_ids[cam.id] == "recording":
             cam.status = "recording"
-            
-    return cams
+        presented.append(_present_camera(cam, user))
+    return presented
 
 
 @router.post("", response_model=CameraResponse, status_code=201)
-async def create_camera(camera: CameraCreate, db: AsyncSession = Depends(get_db)):
+async def create_camera(request: Request, camera: CameraCreate, db: AsyncSession = Depends(get_db)):
+    _require_settings(request)
     data = camera.model_dump()
     new_cam = Camera(**data)
     db.add(new_cam)
     await db.commit()
     await db.refresh(new_cam)
     await _refresh_recorder(db)
-    return new_cam
+    return _present_camera(new_cam, getattr(request.state, "user", None))
 
 
 @router.patch("/{camera_id}", response_model=CameraResponse)
-async def update_camera(camera_id: str, update: CameraUpdate, db: AsyncSession = Depends(get_db)):
+async def update_camera(camera_id: str, update: CameraUpdate, request: Request, db: AsyncSession = Depends(get_db)):
+    _require_settings(request)
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam:
         raise HTTPException(404, "Camera not found")
-    for k, v in update.model_dump(exclude_unset=True).items():
+    for k, v in _ignore_masked_updates(update.model_dump(exclude_unset=True)).items():
         setattr(cam, k, v)
     await db.commit()
     await db.refresh(cam)
     await _refresh_recorder(db)
-    return cam
+    return _present_camera(cam, getattr(request.state, "user", None))
 
 
 @router.delete("/{camera_id}")
-async def delete_camera(camera_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_camera(camera_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    _require_settings(request)
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam:
@@ -428,11 +460,13 @@ def get_default_rtsp_paths(manufacturer: str | None, model: str | None, ip: str,
 @router.post("/adopt", response_model=CameraResponse, status_code=201)
 async def adopt_camera(
     data: ONVIFDiscoveryResult,
-    username: str = "admin",
-    password: str = "admin",
+    request: Request,
+    username: str = "",
+    password: str = "",
     db: AsyncSession = Depends(get_db),
 ):
     """Probe a discovered device for RTSP streams, then save it."""
+    _require_settings(request)
     import urllib.parse
     port = 80
     if data.onvif_endpoint:
@@ -491,4 +525,4 @@ async def adopt_camera(
     await db.commit()
     await db.refresh(cam)
     await _refresh_recorder(db)
-    return cam
+    return _present_camera(cam, getattr(request.state, "user", None))

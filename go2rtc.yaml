@@ -1,16 +1,13 @@
+# Local default. Docker Compose replaces this with a generated file that
+# listens on 127.0.0.1 and requires the password in the secrets volume.
 api:
-  listen: ":1984"
-  origin: "*"
+  listen: "127.0.0.1:1984"
+  origin: "http://127.0.0.1:8000"
 
 webrtc:
-  listen: ":8555"
+  listen: "127.0.0.1:8555"
 
 rtsp:
-  listen: ":8554"
+  listen: "127.0.0.1:8554"
 
-# This file will be automatically populated with streams from the PostgreSQL database 
-# when cameras are adopted via the mView Sentinel API.
-streams:
-  # Example dynamic stream (auto-generated when adopted)
-  # camera_1_main: rtsp://admin:password@192.168.1.101/stream1
-  # camera_1_sub: rtsp://admin:password@192.168.1.101/stream2
+streams: {}

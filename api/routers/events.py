@@ -81,67 +81,32 @@ async def get_events(
 
 @router.post("/search")
 async def search_events(req: EventSearchRequest, db: AsyncSession = Depends(get_db)):
-    """
-    Search recorded events using Natural Language Semantic Search (CLIP vector similarity)
-    with seamless fallback to keyword-based token matching.
-    """
+    """Search stored object labels. A CLIP embedding model is not installed."""
     search_term = req.query.strip()
     if not search_term:
         raise HTTPException(status_code=400, detail="Search query cannot be empty")
 
-    is_postgres = engine.url.get_backend_name().startswith("postgresql")
-    events = []
+    keywords = search_term.lower().split()
+    stmt = select(
+        Event.id,
+        Event.camera_id,
+        Event.object_class,
+        Event.confidence,
+        Event.timestamp,
+        Event.thumbnail_path,
+    ).order_by(desc(Event.timestamp))
 
-    # Attempt semantic vector search if vector engine is available
-    if is_postgres:
-        try:
-            from detector.semantic_search import semantic_engine
-            query_vector = semantic_engine.embed_text(search_term).tolist()
+    if req.camera_id:
+        stmt = stmt.where(Event.camera_id == req.camera_id)
+    if req.min_confidence > 0:
+        stmt = stmt.where(Event.confidence >= req.min_confidence)
 
-            stmt = select(
-                Event.id,
-                Event.camera_id,
-                Event.object_class,
-                Event.confidence,
-                Event.timestamp,
-                Event.thumbnail_path,
-            ).where(Event.embedding.is_not(None))
+    for kw in keywords:
+        stmt = stmt.where(Event.object_class.ilike(f"%{kw}%"))
 
-            if req.camera_id:
-                stmt = stmt.where(Event.camera_id == req.camera_id)
-            if req.min_confidence > 0:
-                stmt = stmt.where(Event.confidence >= req.min_confidence)
-
-            # Cosine distance ordering
-            stmt = stmt.order_by(Event.embedding.cosine_distance(query_vector)).limit(req.limit)
-            result = await db.execute(stmt)
-            events = result.all()
-        except Exception:
-            events = []
-
-    # Fallback to tokenized pattern matching if vector search yielded zero results
-    if not events:
-        keywords = search_term.lower().split()
-        stmt = select(
-            Event.id,
-            Event.camera_id,
-            Event.object_class,
-            Event.confidence,
-            Event.timestamp,
-            Event.thumbnail_path,
-        ).order_by(desc(Event.timestamp))
-
-        if req.camera_id:
-            stmt = stmt.where(Event.camera_id == req.camera_id)
-        if req.min_confidence > 0:
-            stmt = stmt.where(Event.confidence >= req.min_confidence)
-
-        for kw in keywords:
-            stmt = stmt.where(Event.object_class.ilike(f"%{kw}%"))
-
-        stmt = stmt.limit(req.limit)
-        result = await db.execute(stmt)
-        events = result.all()
+    stmt = stmt.limit(req.limit)
+    result = await db.execute(stmt)
+    events = result.all()
 
     event_ids = [e.id for e in events]
     reviews = {}
@@ -149,22 +114,27 @@ async def search_events(req: EventSearchRequest, db: AsyncSession = Depends(get_
         review_result = await db.execute(select(EventReview).where(EventReview.event_id.in_(event_ids)))
         reviews = {review.event_id: review for review in review_result.scalars().all()}
 
-    return [
-        {
-            "id": str(e.id),
-            "camera_id": e.camera_id,
-            "object_class": e.object_class or "unknown",
-            "confidence": e.confidence,
-            "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-            "has_thumbnail": bool(e.thumbnail_path and os.path.exists(e.thumbnail_path)),
-            "review": {
-                "verdict": reviews[e.id].verdict,
-                "note": reviews[e.id].note or "",
-                "tags": (reviews[e.id].config or {}).get("tags", []),
-            } if e.id in reviews else None,
-        }
-        for e in events
-    ]
+    return {
+        "mode": "keyword",
+        "engine": "unavailable",
+        "results": [
+            {
+                "id": str(e.id),
+                "search_mode": "keyword",
+                "camera_id": e.camera_id,
+                "object_class": e.object_class or "unknown",
+                "confidence": e.confidence,
+                "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+                "has_thumbnail": bool(e.thumbnail_path and os.path.exists(e.thumbnail_path)),
+                "review": {
+                    "verdict": reviews[e.id].verdict,
+                    "note": reviews[e.id].note or "",
+                    "tags": (reviews[e.id].config or {}).get("tags", []),
+                } if e.id in reviews else None,
+            }
+            for e in events
+        ],
+    }
 
 
 _ANALYTICS_CACHE: Dict[str, Any] = {"timestamp": 0.0, "data": None}
@@ -217,10 +187,12 @@ async def get_event_analytics(db: AsyncSession = Depends(get_db)):
 
 @router.get("/{event_id}/thumbnail")
 async def get_event_thumbnail(event_id: str, db: AsyncSession = Depends(get_db)):
+    from api.security import contained_path
     event = await db.get(Event, event_id)
-    if not event or not event.thumbnail_path or not os.path.exists(event.thumbnail_path):
+    thumb = contained_path(settings.thumbnail_path, event.thumbnail_path) if event and event.thumbnail_path else None
+    if thumb is None or not thumb.is_file():
         raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return FileResponse(event.thumbnail_path, media_type="image/jpeg")
+    return FileResponse(str(thumb), media_type="image/jpeg")
 
 
 @router.delete("/{event_id}")

@@ -78,15 +78,30 @@ class Settings(BaseSettings):
         default=1883,
         validation_alias=AliasChoices("SENTINEL_MQTT_PORT", "MQTT_PORT"),
     )
-    mqtt_username: str = ""
-    mqtt_password: str = ""
+    mqtt_username: str = Field(
+        default="",
+        validation_alias=AliasChoices("SENTINEL_MQTT_USERNAME", "MQTT_USERNAME"),
+    )
+    mqtt_password: str = Field(
+        default="",
+        validation_alias=AliasChoices("SENTINEL_MQTT_PASSWORD", "MQTT_PASSWORD"),
+    )
     mqtt_client_id: str = "sentinel-api"
 
     # ── JWT / Auth ──────────────────────────────────────────────────────
     jwt_secret: str = Field(
-        default="CHANGE-ME-IN-PRODUCTION-USE-RANDOM-SECRET",
+        default="",
         validation_alias=AliasChoices("SENTINEL_JWT_SECRET", "JWT_SECRET"),
-        description="Secret key for JWT signing – MUST be changed in production.",
+        description="Secret key for JWT signing. Weak or empty values are replaced at startup.",
+    )
+    service_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("SENTINEL_SERVICE_TOKEN", "SERVICE_TOKEN"),
+        description="Bearer token the detector uses. It is not an admin session.",
+    )
+    enable_docs: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SENTINEL_ENABLE_DOCS", "ENABLE_DOCS"),
     )
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = Field(
@@ -100,7 +115,7 @@ class Settings(BaseSettings):
 
     # ── Default Admin ───────────────────────────────────────────────────
     default_admin_username: str = "admin"
-    default_admin_password: str = "admin"
+    default_admin_password: str = ""
     default_admin_email: str = "admin@sentinel.local"
 
     # ── Storage ─────────────────────────────────────────────────────────
@@ -165,7 +180,7 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
 
     # ── CORS ────────────────────────────────────────────────────────────
-    cors_origins: list[str] = ["*"]
+    cors_origins: list[str] = Field(default_factory=list)
 
     # ── AI Active Operator Settings ─────────────────────────────────────
     ai_provider: str = Field(
@@ -191,9 +206,80 @@ class Settings(BaseSettings):
 
     def load_yaml_cameras(self) -> list[dict[str, Any]]:
         """Return camera definitions from sentinel.yml if present."""
+        if self.cameras_config:
+            return list(self.cameras_config)
         cfg = _load_yaml_config()
-        return cfg.get("cameras", [])
+        cameras = cfg.get("cameras") or []
+        return cameras if isinstance(cameras, list) else []
 
 
-# Singleton settings instance
-settings = Settings()
+_YAML_FIELDS = {
+    "database_url": ("SENTINEL_DATABASE_URL", "DATABASE_URL"),
+    "mqtt_broker": ("SENTINEL_MQTT_BROKER", "MQTT_BROKER"),
+    "mqtt_port": ("SENTINEL_MQTT_PORT", "MQTT_PORT"),
+    "mqtt_username": ("SENTINEL_MQTT_USERNAME", "MQTT_USERNAME"),
+    "mqtt_password": ("SENTINEL_MQTT_PASSWORD", "MQTT_PASSWORD"),
+    "redis_url": ("SENTINEL_REDIS_URL", "REDIS_URL"),
+    "storage_path": ("SENTINEL_STORAGE_PATH", "STORAGE_PATH"),
+    "jwt_secret": ("SENTINEL_JWT_SECRET", "JWT_SECRET"),
+    "retention_days": ("SENTINEL_RETENTION_DAYS", "RETENTION_DAYS"),
+    "segment_seconds": ("SENTINEL_SEGMENT_SECONDS", "SEGMENT_SECONDS"),
+    "ai_provider": ("SENTINEL_AI_PROVIDER", "AI_PROVIDER"),
+    "gemini_api_key": ("SENTINEL_GEMINI_API_KEY", "GEMINI_API_KEY"),
+    "openai_api_key": ("SENTINEL_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    "recordings_dir": ("SENTINEL_RECORDINGS_DIR", "RECORDINGS_DIR"),
+    "go2rtc_url": ("SENTINEL_GO2RTC_URL", "GO2RTC_URL"),
+}
+
+
+def _env_provides(field_name: str) -> bool:
+    for key in _YAML_FIELDS.get(field_name, (f"SENTINEL_{field_name.upper()}",)):
+        if os.environ.get(key) not in (None, ""):
+            return True
+    return False
+
+
+def _flatten_yaml(data: dict[str, Any]) -> dict[str, Any]:
+    """Map the nested sentinel.yml document onto Settings field names."""
+    system = data.get("system") if isinstance(data.get("system"), dict) else {}
+    recordings = data.get("recordings") if isinstance(data.get("recordings"), dict) else {}
+    ai = data.get("ai") if isinstance(data.get("ai"), dict) else {}
+    mapped = {
+        "database_url": system.get("database_url"),
+        "mqtt_broker": system.get("mqtt_broker"),
+        "mqtt_port": system.get("mqtt_port"),
+        "mqtt_username": system.get("mqtt_username"),
+        "mqtt_password": system.get("mqtt_password"),
+        "redis_url": system.get("redis_url"),
+        "storage_path": system.get("storage_path"),
+        "jwt_secret": system.get("jwt_secret"),
+        "retention_days": recordings.get("retention_days"),
+        "segment_seconds": recordings.get("segment_length_seconds") or recordings.get("segment_seconds"),
+        "recordings_dir": recordings.get("directory") or recordings.get("recordings_dir"),
+        "ai_provider": ai.get("provider") or ai.get("ai_provider"),
+        "gemini_api_key": ai.get("gemini_api_key"),
+        "openai_api_key": ai.get("openai_api_key"),
+    }
+    flat = {key: value for key, value in mapped.items() if value not in (None, "")}
+    cameras = data.get("cameras")
+    if isinstance(cameras, list):
+        flat["cameras_config"] = cameras
+    return flat
+
+
+def build_settings() -> Settings:
+    """Load YAML under environment variables, then replace a public JWT secret."""
+    from api.secrets_bootstrap import ensure_jwt_secret, ensure_service_token, is_weak_secret
+
+    flat = _flatten_yaml(_load_yaml_config())
+    if is_weak_secret(str(flat.get("jwt_secret") or "")):
+        flat.pop("jwt_secret", None)
+    init = {key: value for key, value in flat.items() if not _env_provides(key)}
+    cfg = Settings(**init)
+    cfg.jwt_secret = ensure_jwt_secret(cfg.jwt_secret)
+    cfg.service_token = ensure_service_token(cfg.service_token)
+    return cfg
+
+
+# Singleton settings instance. Environment variables override sentinel.yml.
+settings = build_settings()

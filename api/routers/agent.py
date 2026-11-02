@@ -46,14 +46,13 @@ async def run_update_camera(db: AsyncSession, camera_id: str, name: str = None, 
         cam.name = name
     if location:
         cam.location = location
-    if rtsp_url_main:
-        cam.rtsp_url_main = rtsp_url_main
-    if rtsp_url_sub:
-        cam.rtsp_url_sub = rtsp_url_sub
+    if rtsp_url_main or rtsp_url_sub:
+        return "Refusing to change a camera stream URL from the assistant. Update streams from Settings."
         
     await db.commit()
     from api.services.recorder import recorder_manager
-    await recorder_manager.sync_cameras([cam])
+    result = await db.execute(select(Camera))
+    await recorder_manager.sync_cameras(result.scalars().all())
     return f"Successfully updated camera '{cam.name}'."
 
 async def run_update_system_config(db: AsyncSession, retention_days: int = None) -> str:
@@ -114,15 +113,13 @@ async def handle_gemini_agent(req: ChatRequest, db: AsyncSession) -> dict:
                 },
                 {
                     "name": "update_camera",
-                    "description": "Update a camera's configuration (name, location, RTSP URLs, etc.).",
+                    "description": "Rename a camera or change its location. Stream URLs are changed in Settings.",
                     "parameters": {
                         "type": "OBJECT",
                         "properties": {
                             "camera_id": {"type": "STRING", "description": "The unique UUID of the camera."},
                             "name": {"type": "STRING", "description": "New name of the camera."},
-                            "location": {"type": "STRING", "description": "New location of the camera."},
-                            "rtsp_url_main": {"type": "STRING", "description": "Main stream RTSP URL."},
-                            "rtsp_url_sub": {"type": "STRING", "description": "Sub stream RTSP URL."}
+                            "location": {"type": "STRING", "description": "New location of the camera."}
                         },
                         "required": ["camera_id"]
                     }
@@ -253,15 +250,13 @@ async def handle_openai_agent(req: ChatRequest, db: AsyncSession) -> dict:
             "type": "function",
             "function": {
                 "name": "update_camera",
-                "description": "Update a camera's configuration (name, location, RTSP URLs, etc.).",
+                "description": "Rename a camera or change its location. Stream URLs are changed in Settings.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "camera_id": {"type": "string", "description": "The unique UUID of the camera."},
                         "name": {"type": "string", "description": "New name of the camera."},
-                        "location": {"type": "string", "description": "New location of the camera."},
-                        "rtsp_url_main": {"type": "string", "description": "Main stream RTSP URL."},
-                        "rtsp_url_sub": {"type": "string", "description": "Sub stream RTSP URL."}
+                        "location": {"type": "string", "description": "New location of the camera."}
                     },
                     "required": ["camera_id"]
                 }

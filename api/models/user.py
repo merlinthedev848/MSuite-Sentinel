@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, JSON, String
+from sqlalchemy import Column, DateTime, Integer, JSON, String
 
 from api.database import Base
 
@@ -18,4 +18,5 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     role = Column(String, nullable=False, default="viewer")
     permissions = Column(JSON, nullable=False, default=list)
+    token_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), default=utc_now)

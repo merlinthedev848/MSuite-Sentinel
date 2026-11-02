@@ -17,7 +17,6 @@ from api.services.recorder import list_recordings, is_finalized_mp4
 router = APIRouter(prefix="/recordings-list", tags=["Recordings"])
 
 EXPORT_DIR = Path(settings.export_path) if hasattr(settings, "export_path") else Path(settings.storage_path) / "exports"
-EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class ExportRequest(BaseModel):
@@ -61,13 +60,19 @@ async def export_evidence(req: ExportRequest):
     if start_dt >= end_dt:
         raise HTTPException(status_code=400, detail="Start time must be strictly before end time")
 
-    cam_id = req.camera_id
+    from api.security import safe_camera_id
+    try:
+        cam_id = safe_camera_id(req.camera_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid camera id")
     hot_dir = Path(settings.recordings_dir) / cam_id
-    cold_dir = Path(os.getenv("COLD_STORAGE_PATH", "/mnt/archive/mview/recordings")) / cam_id
+    cold_env = os.getenv("COLD_STORAGE_PATH", "").strip()
+    cold_dir = Path(cold_env) / cam_id if cold_env else None
 
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     candidate_files = []
     for directory in (hot_dir, cold_dir):
-        if directory.exists():
+        if directory is not None and directory.exists():
             for p in directory.glob("*.mp4"):
                 try:
                     stat = p.stat()
@@ -94,7 +99,7 @@ async def export_evidence(req: ExportRequest):
             matching.append(f_path)
 
     if not matching:
-        matching = [candidate_files[-1][1]]
+        raise HTTPException(status_code=404, detail="No recording overlaps the requested time range")
 
     export_id = f"evidence_{int(time.time())}_{cam_id[:8]}"
     out_filename = f"{export_id}.mp4"

@@ -34,25 +34,41 @@ CAMERA_ID = os.getenv("CAMERA_ID", "")
 STREAM_URL = os.getenv("STREAM_URL", "")
 
 
+def _service_token() -> str:
+    token = os.getenv("SENTINEL_SERVICE_TOKEN", "").strip()
+    if token:
+        return token
+    secrets_dir = os.getenv("SENTINEL_SECRETS_DIR", "/run/sentinel/secrets")
+    path = os.path.join(secrets_dir, "service_token")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
 def fetch_active_streams() -> list[tuple[str, str]]:
-    """Query Sentinel NVR API to discover active camera stream RTSP URLs."""
+    """Ask the API for every camera that has a stream, including ones still marked offline."""
     api_url = os.getenv("API_URL", "http://127.0.0.1:8000/cameras")
     try:
         import urllib.request
-        req = urllib.request.Request(api_url, headers={"User-Agent": "Sentinel-Detector/1.0"})
+        headers = {"User-Agent": "Sentinel-Detector/1.0"}
+        token = _service_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(api_url, headers=headers)
         with urllib.request.urlopen(req, timeout=3.0) as resp:
             if resp.status == 200:
                 cams = json.loads(resp.read().decode())
                 streams = []
-                for c in cams:
-                    cid = c.get("id")
-                    if cid and c.get("status") in ("online", "recording"):
-                        # Prefer go2rtc RTSP proxy stream
-                        rtsp = f"rtsp://127.0.0.1:8554/{cid}"
-                        streams.append((cid, rtsp))
+                for cam in cams:
+                    cid = cam.get("id")
+                    has_stream = bool(cam.get("rtsp_url_main") or cam.get("rtsp_url_sub"))
+                    if cid and has_stream and cam.get("enabled", True):
+                        streams.append((cid, f"rtsp://127.0.0.1:8554/{cid}"))
                 return streams
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Camera discovery failed: %s", exc)
     return []
 
 
@@ -73,6 +89,7 @@ class DetectorNode:
         self.last_event_by_class: dict[str, float] = {}
         self.cooldown = EVENT_COOLDOWN_SECONDS
         self._stream_cursor = 0
+        self._motion_camera = ""
 
     def _ensure_mqtt(self):
         if self.mqtt_client is not None:
@@ -83,6 +100,10 @@ class DetectorNode:
         self._last_mqtt_attempt = now
         logger.info(f"Connecting to MQTT Broker at {MQTT_BROKER}:{MQTT_PORT}...")
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        username = os.getenv("MQTT_USERNAME", "").strip()
+        password = os.getenv("MQTT_PASSWORD", "")
+        if username:
+            client.username_pw_set(username, password)
         try:
             client.connect(MQTT_BROKER, MQTT_PORT, 60)
             client.loop_start()
@@ -96,18 +117,22 @@ class DetectorNode:
         target_camera_id = CAMERA_ID
         target_url = STREAM_URL
 
-        # If no explicit STREAM_URL is given or if default camera1 is set, auto-discover from API
-        if not target_url or "camera1" in target_url:
-            active_streams = fetch_active_streams()
-            if active_streams:
-                idx = self._stream_cursor % len(active_streams)
-                self._stream_cursor += 1
-                target_camera_id, target_url = active_streams[idx]
-            else:
-                logger.info("Waiting for adopted camera streams from Sentinel NVR...")
-                time.sleep(15)
-                return
+        # The compose placeholder "camera1" is not a real camera. Rotate through
+        # every discovered stream, including cameras whose status is still offline.
+        placeholder = (not target_url) or ("camera1" in target_url)
+        active_streams = fetch_active_streams()
+        if active_streams:
+            idx = self._stream_cursor % len(active_streams)
+            self._stream_cursor += 1
+            target_camera_id, target_url = active_streams[idx]
+        elif placeholder:
+            logger.info("Waiting for adopted camera streams from Sentinel NVR...")
+            time.sleep(15)
+            return
 
+        if target_camera_id != self._motion_camera:
+            motion_gate.reset()
+            self._motion_camera = target_camera_id
         logger.info(f"Connecting to camera [{target_camera_id}] stream: {target_url}")
         cap = cv2.VideoCapture(target_url, cv2.CAP_FFMPEG)
         try:
@@ -118,8 +143,15 @@ class DetectorNode:
                 return
 
             frame_count = 0
+            decoded = 0
+            frames_per_camera = max(1, int(os.getenv("FRAMES_PER_CAMERA", "48")))
+            last_heartbeat = 0.0
             while cap.isOpened():
                 frame_count += 1
+                now = time.time()
+                if now - last_heartbeat >= 15.0:
+                    last_heartbeat = now
+                    self.publish_heartbeat(target_camera_id)
                 # Use grab() on non-stride frames to advance the demuxer without full frame decoding
                 if frame_count % FRAME_STRIDE != 0:
                     if not cap.grab():
@@ -128,6 +160,10 @@ class DetectorNode:
 
                 ret, frame = cap.read()
                 if not ret or frame is None:
+                    break
+                decoded += 1
+                if decoded >= frames_per_camera:
+                    logger.info("Finished %s frames on %s; moving to the next camera", decoded, target_camera_id)
                     break
 
                 # Motion gating pre-filter to skip idle frames without running heavy neural networks
@@ -167,10 +203,10 @@ class DetectorNode:
                             cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
                             pil_img = Image.fromarray(cropped_rgb)
                             embedding = semantic_engine.embed_image(pil_img)
-                            embedding_list = embedding.tolist()
+                            embedding_list = embedding.tolist() if embedding is not None else None
                         except Exception as e:
                             logger.error(f"Failed to generate embedding: {e}")
-                            embedding_list = []
+                            embedding_list = None
 
                         detections.append({
                             "class": class_name,
@@ -182,8 +218,9 @@ class DetectorNode:
                                 max(0, min(1, x2 / frame_w)),
                                 max(0, min(1, y2 / frame_h)),
                             ],
-                            "embedding": embedding_list
                         })
+                        if embedding_list:
+                            detections[-1]["embedding"] = embedding_list
 
                 if detections:
                     self.publish_event(detections, frame_w, frame_h, target_camera_id)
@@ -192,6 +229,26 @@ class DetectorNode:
 
         logger.info("Stream connection lost or ended. Reconnecting in 5s...")
         time.sleep(5)
+
+    def publish_heartbeat(self, camera_id: str):
+        self._ensure_mqtt()
+        if not self.mqtt_client:
+            return
+        payload = {
+            "camera_id": camera_id or CAMERA_ID or "default_cam",
+            "timestamp": time.time(),
+            "heartbeat": True,
+            "objects": [],
+        }
+        try:
+            self.mqtt_client.publish(
+                f"sentinel/events/{payload['camera_id']}",
+                json.dumps(payload, separators=(",", ":")),
+                qos=1,
+            )
+        except Exception as exc:
+            logger.warning("Heartbeat publish failed: %s", exc)
+            self.mqtt_client = None
 
     def publish_event(self, detections, frame_w, frame_h, camera_id="default_cam"):
         self._ensure_mqtt()
@@ -225,7 +282,7 @@ class DetectorNode:
         topic = f"sentinel/events/{cam_id}"
         if self.mqtt_client:
             try:
-                self.mqtt_client.publish(topic, json.dumps(payload, separators=(",", ":")), qos=0)
+                self.mqtt_client.publish(topic, json.dumps(payload, separators=(",", ":")), qos=1)
                 logger.info(f"Published event with {len(publishable)} objects to {topic}")
             except Exception as e:
                 logger.warning(f"MQTT publish failed ({e}); resetting client.")

@@ -16,6 +16,6 @@ RUN pip install uv && uv pip install --system --no-cache -r requirements.txt --e
 
 # Copy source code
 COPY . .
+RUN chmod 755 /app/entrypoint.sh
 
-# Run the detector service
-CMD ["python", "detector.py"]
+ENTRYPOINT ["/app/entrypoint.sh"]

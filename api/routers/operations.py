@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -113,8 +113,26 @@ def _rtsp_url(host: str, port: int | str, username: str, password: str, path: st
     return f"rtsp://{_credentials(username, password)}{host}:{port}{normalized_path}"
 
 
-def _nvr_response(nvr: NVRConnection) -> dict[str, Any]:
+def _mask_channels(channels: list) -> list:
+    from api.security import mask_rtsp_url
+    masked = []
+    for channel in channels or []:
+        if not isinstance(channel, dict):
+            masked.append(channel)
+            continue
+        item = dict(channel)
+        for key in ("rtsp_url_main", "rtsp_url_sub", "rtsp_url"):
+            if key in item:
+                item[key] = mask_rtsp_url(item.get(key))
+        if item.get("password"):
+            item["password"] = "********"
+        masked.append(item)
+    return masked
+
+
+def _nvr_response(nvr: NVRConnection, *, reveal_secrets: bool = False) -> dict[str, Any]:
     config = nvr.config or {}
+    channels = config.get("channels", [])
     return {
         "id": nvr.id,
         "name": nvr.name,
@@ -122,11 +140,12 @@ def _nvr_response(nvr: NVRConnection) -> dict[str, Any]:
         "host": nvr.host,
         "port": int(nvr.port),
         "username": nvr.username or "",
+        "password": nvr.password if reveal_secrets else None,
         "enabled": nvr.enabled,
         "status": nvr.status,
         "channel_count": config.get("channel_count", 0),
         "use_substreams": config.get("use_substreams", True),
-        "channels": config.get("channels", []),
+        "channels": channels if reveal_secrets else _mask_channels(channels),
         "created_at": nvr.created_at.isoformat() if nvr.created_at else None,
         "updated_at": nvr.updated_at.isoformat() if nvr.updated_at else None,
     }
@@ -166,9 +185,10 @@ async def health_center(db: AsyncSession = Depends(get_db)):
     nvrs = (await db.execute(select(NVRConnection))).scalars().all()
     events = (await db.execute(select(SemanticEvent).order_by(SemanticEvent.timestamp.desc()).limit(25))).scalars().all()
     recorder_status = recorder_manager.status()
+    actively_recording = {cid for cid, state in recorder_status.items() if state == "recording"}
     storage = _recording_dir_size()
     offline = [cam for cam in cameras if cam.status == "offline" or not cam.enabled]
-    recording_gaps = [cam for cam in cameras if cam.enabled and cam.id not in recorder_status]
+    recording_gaps = [cam for cam in cameras if cam.enabled and cam.id not in actively_recording]
 
     issues = []
     for cam in offline:
@@ -182,7 +202,7 @@ async def health_center(db: AsyncSession = Depends(get_db)):
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "summary": {
             "cameras": len(cameras),
-            "recording": len(recorder_status),
+            "recording": len(actively_recording),
             "offline": len(offline),
             "nvrs": len(nvrs),
             "events_loaded": len(events),
@@ -223,14 +243,20 @@ async def preview_nvr(payload: NVRCreate):
     return {"channels": preview}
 
 
+def _reveal_secrets(request: Request) -> bool:
+    from api.security import can_view_secrets
+    return can_view_secrets(getattr(request.state, "user", None))
+
+
 @router.get("/nvrs")
-async def list_nvrs(db: AsyncSession = Depends(get_db)):
+async def list_nvrs(request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(NVRConnection).order_by(NVRConnection.created_at.desc()))
-    return [_nvr_response(nvr) for nvr in result.scalars().all()]
+    reveal = _reveal_secrets(request)
+    return [_nvr_response(nvr, reveal_secrets=reveal) for nvr in result.scalars().all()]
 
 
 @router.post("/nvrs", status_code=201)
-async def create_nvr(payload: NVRCreate, db: AsyncSession = Depends(get_db)):
+async def create_nvr(payload: NVRCreate, request: Request, db: AsyncSession = Depends(get_db)):
     preview = (await preview_nvr(payload))["channels"]
     nvr = NVRConnection(
         name=payload.name,
@@ -267,11 +293,11 @@ async def create_nvr(payload: NVRCreate, db: AsyncSession = Depends(get_db)):
         created.append(cam)
     await db.commit()
     await _refresh_recorders(db)
-    return {"nvr": _nvr_response(nvr), "created_cameras": len(created)}
+    return {"nvr": _nvr_response(nvr, reveal_secrets=_reveal_secrets(request)), "created_cameras": len(created)}
 
 
 @router.patch("/nvrs/{nvr_id}")
-async def update_nvr(nvr_id: str, payload: NVRUpdate, db: AsyncSession = Depends(get_db)):
+async def update_nvr(nvr_id: str, payload: NVRUpdate, request: Request, db: AsyncSession = Depends(get_db)):
     nvr = await db.get(NVRConnection, nvr_id)
     if not nvr:
         raise HTTPException(404, "NVR not found")
@@ -289,7 +315,7 @@ async def update_nvr(nvr_id: str, payload: NVRUpdate, db: AsyncSession = Depends
             config[key] = value
     nvr.config = config
     await db.commit()
-    return _nvr_response(nvr)
+    return _nvr_response(nvr, reveal_secrets=_reveal_secrets(request))
 
 
 @router.delete("/nvrs/{nvr_id}")

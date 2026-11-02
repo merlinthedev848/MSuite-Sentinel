@@ -42,6 +42,10 @@ class NotificationService:
     async def send_generic_webhook(self, webhook_url: Optional[str], event_data: dict):
         if not webhook_url:
             return
+        from api.security import webhook_target_allowed
+        if not webhook_target_allowed(webhook_url):
+            logger.warning("Refused webhook target that is not a public http(s) address")
+            return
         try:
             client = await self._get_client()
             resp = await client.post(webhook_url, json=event_data)
@@ -51,6 +55,10 @@ class NotificationService:
 
     async def send_discord(self, webhook_url: Optional[str], event_data: dict):
         if not webhook_url:
+            return
+        from api.security import webhook_target_allowed
+        if not webhook_target_allowed(webhook_url):
+            logger.warning("Refused Discord webhook target that is not a public http(s) address")
             return
             
         payload = {
