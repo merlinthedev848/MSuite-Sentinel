@@ -19,6 +19,7 @@ All notable changes, fixes, security enhancements, and performance optimizations
 - Applied `sentinel.yml` when the environment does not set the same value.
 
 ### Behavior
+- The detector container starts `/app/entrypoint.sh`, which is where the image copies the script. `/entrypoint.sh` is a link to that file, so a last-layer rebuild satisfies the old path without reinstalling the detector packages.
 - Event search is keyword matching. Face recognition and ALPR return nothing until a real engine is configured.
 - The detector rotates across cameras and publishes heartbeats. Signal loss is a missed heartbeat, not a failed snapshot.
 - Cold storage stays disabled unless `COLD_STORAGE_PATH` is set, and retention deletes expired files there too.

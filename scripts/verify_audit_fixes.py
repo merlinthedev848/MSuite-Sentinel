@@ -81,6 +81,14 @@ check("compose does not publish redis", "6379:6379" not in compose and "redis:" 
 check("postgres is localhost only", '127.0.0.1:5432:5432' in compose)
 check("mqtt is localhost only", '127.0.0.1:1883:1883' in compose)
 check("apparmor unconfined removed", "apparmor=unconfined" not in compose)
+detector_dockerfile = (ROOT / "detector" / "Dockerfile").read_text()
+check(
+    "detector entrypoint is the script baked into the image",
+    'entrypoint: ["/app/entrypoint.sh"]' in compose
+    and 'ENTRYPOINT ["/app/entrypoint.sh"]' in detector_dockerfile
+    and "ln -sf /app/entrypoint.sh /entrypoint.sh" in detector_dockerfile
+    and 'entrypoint: ["/entrypoint.sh"]' not in compose,
+)
 mosquitto = (ROOT / "config" / "mosquitto.conf").read_text()
 check("mqtt anonymous disabled", "allow_anonymous false" in mosquitto and "persistence true" in mosquitto)
 go2rtc = (ROOT / "go2rtc.yaml").read_text()
