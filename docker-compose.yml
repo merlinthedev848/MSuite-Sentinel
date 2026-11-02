@@ -55,7 +55,7 @@ services:
       dockerfile: Dockerfile
     container_name: sentinel-detector
     network_mode: host
-    entrypoint: ["/entrypoint.sh"]
+    entrypoint: ["/app/entrypoint.sh"]
     environment:
       - SENTINEL_SECRETS_DIR=/run/sentinel/secrets
       - MQTT_BROKER=127.0.0.1
