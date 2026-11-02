@@ -15,7 +15,7 @@ const WallboardCell = React.memo<{ cam: Camera }>(({ cam }) => {
   const hasStream = Boolean(cam.rtsp_url_main || cam.rtsp_url_sub);
 
   return (
-    <div style={{ position: 'relative', background: '#02050a', overflow: 'hidden' }}>
+    <div style={{ position: 'relative', background: '#121418', overflow: 'hidden' }}>
       {!hasStream ? (
         <div style={{ height: '100%', display: 'grid', placeItems: 'center', color: '#6b7b95', gap: 8 }}>
           <WifiOff size={28} />
@@ -40,10 +40,10 @@ const WallboardCell = React.memo<{ cam: Camera }>(({ cam }) => {
           position: 'absolute',
           right: 10,
           top: 10,
-          color: '#ff3b6b',
-          fontSize: 11,
-          fontWeight: 800,
-          letterSpacing: 1,
+          color: '#e7d2ce',
+          fontSize: 12,
+          fontWeight: 600,
+          letterSpacing: 0,
           textShadow: '0 2px 8px #000',
         }}>
           REC
@@ -88,7 +88,7 @@ const Wallboard: React.FC = () => {
     <div style={{
       width: '100vw',
       height: '100vh',
-      background: '#02050a',
+      background: '#16181c',
       display: 'grid',
       gridTemplateColumns: `repeat(${columns}, 1fr)`,
       gridAutoRows: '1fr',
@@ -103,7 +103,7 @@ const Wallboard: React.FC = () => {
       >
         <button
           onClick={() => window.location.href = '/'}
-          style={{ background: '#ff3b6b', color: '#fff', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}
+          style={{ background: '#e4e8ed', color: '#17191d', border: 'none', padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: 600 }}
         >
           Exit Wallboard
         </button>

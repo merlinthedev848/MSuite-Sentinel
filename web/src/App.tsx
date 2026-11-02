@@ -203,10 +203,10 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
             <span style={{ fontSize: '0.74rem', color: 'var(--t2)' }}>Network</span>
             <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: systemStats.network === 'OK' ? 'var(--green)' : 'var(--t2)' }}>{systemStats.network}</span>
           </div>
-          <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 4, columnGap: 8, fontSize: '0.66rem', color: 'var(--t3)', fontFamily: 'JetBrains Mono, monospace' }}>
+          <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 6, columnGap: 12, fontSize: '0.72rem', color: 'var(--t3)' }}>
             <span>CPU</span><span style={{ color: 'var(--t2)' }}>{systemStats.cpu}%</span>
-            <span>Up</span><span style={{ color: 'var(--cyan)' }}>{systemStats.up} Mbps</span>
-            <span>Down</span><span style={{ color: 'var(--cyan)' }}>{systemStats.down} Mbps</span>
+            <span>Up</span><span style={{ color: 'var(--t2)' }}>{systemStats.up} Mbps</span>
+            <span>Down</span><span style={{ color: 'var(--t2)' }}>{systemStats.down} Mbps</span>
             <span>Latency</span><span style={{ color: 'var(--t2)' }}>{systemStats.latency} ms</span>
             <span>Codec</span><span style={{ color: 'var(--t2)' }}>{systemStats.codec}</span>
           </div>
@@ -216,11 +216,11 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
       {/* Storage footer */}
       <div className="sidebar-footer" style={{ padding: '12px', borderTop: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--t3)', fontWeight: 600, marginBottom: 4, letterSpacing: '0.02em' }}>
-          <span>NVR ARCHIVE</span>
+          <span>Archive</span>
           <span>{recordingStorage ? `${recordingStorage.total_gb} GB` : '0 GB'}</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--t3)', fontWeight: 600, marginBottom: 6, letterSpacing: '0.02em' }}>
-          <span>SERVER DISK</span>
+          <span>Server disk</span>
           <span>{storage ? `${(storage.total_gb - storage.free_gb).toFixed(1)} GB` : '--'}</span>
         </div>
         
@@ -291,7 +291,7 @@ const AIOperatorDrawer: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
       right: 0,
       bottom: 0,
       width: '360px',
-      background: 'rgba(13, 21, 32, 0.96)',
+      background: '#16181c',
       borderLeft: '1px solid var(--border)',
       boxShadow: '-4px 0 24px rgba(0,0,0,0.5)',
       zIndex: 100,
@@ -328,13 +328,13 @@ const AIOperatorDrawer: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
           <div key={i} style={{
             alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
             maxWidth: '85%',
-            background: msg.role === 'user' ? 'var(--cyan-dim)' : 'var(--card-bg)',
-            color: msg.role === 'user' ? 'var(--cyan)' : 'var(--t1)',
+            background: msg.role === 'user' ? '#2a2e36' : 'var(--bg-card)',
+            color: 'var(--t1)',
             padding: '10px 14px',
             borderRadius: '12px',
             fontSize: '0.78rem',
             lineHeight: 1.4,
-            border: '1px solid ' + (msg.role === 'user' ? 'var(--cyan-dim)' : 'var(--border)'),
+            border: '1px solid var(--border)',
             whiteSpace: 'pre-wrap'
           }}>
             {msg.content}

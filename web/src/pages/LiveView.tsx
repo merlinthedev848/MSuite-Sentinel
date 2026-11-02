@@ -254,8 +254,8 @@ const CameraFeedComponent = React.memo<{
 
       {analytics && (
         <>
-          <div style={{ position: 'absolute', left: '18%', top: '24%', width: '18%', height: '28%', border: '2px solid var(--cyan)', boxShadow: '0 0 14px var(--cyan-glow)', zIndex: 8 }} />
-          <div style={{ position: 'absolute', left: '58%', top: '46%', width: '20%', height: '18%', border: '2px solid var(--pink)', boxShadow: '0 0 14px var(--pink-glow)', zIndex: 8 }} />
+          <div style={{ position: 'absolute', left: '18%', top: '24%', width: '18%', height: '28%', border: '1px solid rgba(255,255,255,0.7)', zIndex: 8 }} />
+          <div style={{ position: 'absolute', left: '58%', top: '46%', width: '20%', height: '18%', border: '1px solid rgba(197,139,132,0.9)', zIndex: 8 }} />
         </>
       )}
 
@@ -507,7 +507,7 @@ const LiveView: React.FC = () => {
         </div>
 
         <div className="topbar-stats" style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--t2)', fontFamily: 'JetBrains Mono, monospace' }}>
+          <div style={{ fontSize: '0.84rem', color: 'var(--t2)' }}>
             <DigitalClock />
           </div>
           <div className="topbar-stat"><span className="topbar-stat-label">System Health</span><span className="topbar-stat-value ok">System OK</span></div>
@@ -570,7 +570,7 @@ const LiveView: React.FC = () => {
               onChange={e => seekSyncVideos(syncWindowStart + (parseInt(e.target.value) / 100) * syncSpan)}
               style={{ flex: 1, accentColor: 'var(--cyan)' }}
             />
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', color: 'var(--t2)' }}>{new Date(syncTargetMs).toLocaleString()}</span>
+            <span style={{ color: 'var(--t2)' }}>{new Date(syncTargetMs).toLocaleString()}</span>
           </div>
           {cameras.length === 0 ? (
             <div className="empty" style={{ flex: 1 }}>

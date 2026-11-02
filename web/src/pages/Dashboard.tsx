@@ -125,8 +125,8 @@ export const Dashboard = () => {
       value: stats.total_cameras,
       detail: `${stats.online_cameras} online`,
       icon: Camera,
-      tone: 'var(--cyan)',
-      background: 'rgba(57,255,20,0.09)',
+      tone: 'var(--t2)',
+      background: 'rgba(168, 180, 194, 0.10)',
     },
     {
       label: 'AI Events',
@@ -134,7 +134,7 @@ export const Dashboard = () => {
       detail: 'real-time',
       icon: AlertTriangle,
       tone: 'var(--red)',
-      background: 'rgba(244,63,94,0.10)',
+      background: 'rgba(197, 139, 132, 0.12)',
     },
     {
       label: 'System Health',
@@ -142,36 +142,36 @@ export const Dashboard = () => {
       detail: 'online',
       icon: Activity,
       tone: 'var(--green)',
-      background: 'rgba(34,197,94,0.10)',
+      background: 'rgba(142, 170, 148, 0.12)',
     },
     {
       label: 'NVR Archive Size',
       value: recordingStorage ? `${recordingStorage.total_gb} GB` : '0 GB',
       detail: storage ? `Server Disk: ${storage.usage_percent}% full` : 'loading',
       icon: HardDrive,
-      tone: 'var(--pink)',
-      background: 'rgba(255,0,255,0.10)',
+      tone: 'var(--t2)',
+      background: 'rgba(183, 174, 166, 0.12)',
     },
   ];
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', padding: 18 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100%' }}>
+    <div style={{ height: '100%', overflowY: 'auto', padding: 28 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 22, minHeight: '100%' }}>
         <header style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 }}>
           <div>
-            <h1 style={{ fontSize: '1.35rem', lineHeight: 1.1, margin: 0, fontWeight: 800, color: 'var(--t1)' }}>
+            <h1 style={{ fontSize: '1.25rem', lineHeight: 1.2, margin: 0, fontWeight: 600, color: 'var(--t1)' }}>
               mView Sentinel Overview
             </h1>
-            <p style={{ color: 'var(--t2)', margin: '5px 0 0', fontSize: '0.84rem' }}>
+            <p style={{ color: 'var(--t2)', margin: '6px 0 0', fontSize: '0.88rem' }}>
               System health, live cameras, recording status, and AI alerts
             </p>
           </div>
-          <div style={{ color: 'var(--t3)', fontSize: '0.72rem', fontFamily: 'JetBrains Mono, monospace' }}>
+          <div style={{ color: 'var(--t3)', fontSize: '0.78rem' }}>
             Refreshes every 5s
           </div>
         </header>
 
-        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 12 }}>
+        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 16 }}>
           {kpis.map(item => {
             const Icon = item.icon;
             return (
@@ -182,7 +182,7 @@ export const Dashboard = () => {
                 <div style={{ minWidth: 0 }}>
                   <div className="card-title">{item.label}</div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6, minWidth: 0 }}>
-                    <span style={{ color: 'var(--t1)', fontSize: '1.3rem', fontWeight: 800, lineHeight: 1 }}>{item.value}</span>
+                    <span style={{ color: 'var(--t1)', fontSize: '1.25rem', fontWeight: 600, lineHeight: 1 }}>{item.value}</span>
                     <span style={{ color: item.tone, fontSize: '0.74rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.detail}</span>
                   </div>
                 </div>
@@ -191,7 +191,7 @@ export const Dashboard = () => {
           })}
         </section>
 
-        <section style={{ display: 'grid', gridTemplateColumns: 'minmax(520px, 1.65fr) minmax(320px, 0.95fr)', gap: 16, alignItems: 'stretch', flex: 1, minHeight: 0 }}>
+        <section style={{ display: 'grid', gridTemplateColumns: 'minmax(520px, 1.65fr) minmax(320px, 0.95fr)', gap: 20, alignItems: 'stretch', flex: 1, minHeight: 0 }}>
           <div style={{ ...panelStyle, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <div style={sectionHeaderStyle}>
               <h2 style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--t1)', fontSize: '0.95rem', margin: 0 }}>
@@ -222,7 +222,7 @@ export const Dashboard = () => {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateRows: 'minmax(300px, 1fr) 260px', gap: 16, minHeight: 0 }}>
+          <div style={{ display: 'grid', gridTemplateRows: 'minmax(300px, 1fr) 260px', gap: 20, minHeight: 0 }}>
             <div style={{ ...panelStyle, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
               <div style={sectionHeaderStyle}>
                 <h2 style={{ color: 'var(--t1)', fontSize: '0.95rem', margin: 0 }}>Real-Time Events</h2>
@@ -267,7 +267,7 @@ export const Dashboard = () => {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
                           <strong style={{ color: 'var(--t1)', fontSize: '0.82rem', textTransform: 'capitalize' }}>{event.object_class || 'event'}</strong>
-                          <span style={{ color: 'var(--t3)', fontSize: '0.7rem', fontFamily: 'JetBrains Mono, monospace' }}>
+                          <span style={{ color: 'var(--t3)', fontSize: '0.72rem' }}>
                             {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '--'}
                           </span>
                         </div>
@@ -275,7 +275,7 @@ export const Dashboard = () => {
                           {cameraNameById[event.camera_id] || `Camera ${event.camera_id.slice(0, 8)}`}
                         </div>
                       </div>
-                      <span style={{ color: 'var(--cyan)', fontSize: '0.72rem', fontWeight: 800 }}>
+                      <span style={{ color: 'var(--t2)', fontSize: '0.75rem', fontWeight: 600 }}>
                         {Math.round((event.confidence || 0) * 100)}%
                       </span>
                     </div>

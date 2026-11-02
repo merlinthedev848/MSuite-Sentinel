@@ -209,7 +209,7 @@ const Events: React.FC = () => {
                   </div>
                   <div
                     className="event-dot"
-                    style={{ background: typeColor(ev.object_class), boxShadow: `0 0 6px ${typeColor(ev.object_class)}` }}
+                    style={{ background: typeColor(ev.object_class) }}
                   />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ fontWeight: 600, fontSize: '0.84rem', textTransform: 'capitalize', color: 'var(--t1)' }}>
@@ -222,8 +222,8 @@ const Events: React.FC = () => {
                   {ev.match_score != null && (
                     <span style={{
                       fontSize: '0.72rem', padding: '2px 9px', borderRadius: 20,
-                      background: 'rgba(16, 185, 129, 0.15)', color: '#10b981',
-                      border: '1px solid rgba(16, 185, 129, 0.3)', marginRight: 6
+                      background: 'var(--green-dim)', color: 'var(--green)',
+                      border: '1px solid transparent', marginRight: 6
                     }}>
                       {Math.round(ev.match_score * 100)}% label match
                     </span>
