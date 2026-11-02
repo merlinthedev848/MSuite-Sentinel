@@ -368,7 +368,7 @@ def _playback_offset(request: Request) -> float:
     if not raw:
         return 0.0
     try:
-        return min(3600.0, max(0.0, float(raw)))
+        return min(24 * 3600.0, max(0.0, float(raw)))
     except ValueError:
         return 0.0
 
@@ -455,6 +455,79 @@ async def _iter_transcoded(src: Path, start: float):
 
 # ── Serve recorded video files ─────────────────────────────────────
 RECORDINGS_DIR = Path(settings.recordings_dir).resolve()
+
+
+@app.get("/recordings/{camera_id}/edge")
+async def serve_edge_recording(camera_id: str, request: Request, start: str, end: str, track: str = "101"):
+    """Stream a camera SD recording for a time the NVR file list does not cover."""
+    from sqlalchemy.future import select
+
+    from api.database import async_session_maker
+    from api.models.camera import Camera
+    from api.security import safe_camera_id
+    from api.services.hikvision_playback import open_edge_ffmpeg, playback_rtsp
+    from api.services.recorder import _terminate_process
+
+    try:
+        cid = safe_camera_id(camera_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid camera id")
+    if not track.isdigit():
+        raise HTTPException(400, "Invalid track")
+    try:
+        start_dt = datetime.fromisoformat(start.replace("Z", "+00:00")).astimezone(timezone.utc)
+        end_dt = datetime.fromisoformat(end.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        raise HTTPException(400, "Invalid time range")
+    if end_dt <= start_dt:
+        raise HTTPException(400, "Invalid time range")
+    if (end_dt - start_dt).total_seconds() > 600:
+        end_dt = start_dt + timedelta(seconds=600)
+
+    async with async_session_maker() as db:
+        result = await db.execute(select(Camera).where(Camera.id == cid))
+        cam = result.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(404, "Camera not found")
+    rtsp_url = cam.rtsp_url_sub or cam.rtsp_url_main
+    playback = playback_rtsp(rtsp_url, cam.onvif_username, cam.onvif_password, start_dt, end_dt, track)
+    if not playback:
+        raise HTTPException(404, "Camera has no footage for that time")
+
+    try:
+        proc = await open_edge_ffmpeg(playback)
+    except OSError:
+        raise HTTPException(503, "Playback transcoder is not available")
+    if proc.stdout is None:
+        await _terminate_process(proc)
+        raise HTTPException(404, "Camera has no footage for that time")
+    try:
+        first = await asyncio.wait_for(proc.stdout.read(64 * 1024), timeout=8)
+    except asyncio.TimeoutError:
+        first = b""
+    if not first:
+        await _terminate_process(proc)
+        raise HTTPException(404, "Camera has no footage for that time")
+
+    async def generate():
+        try:
+            yield first
+            assert proc.stdout is not None
+            while True:
+                if await request.is_disconnected():
+                    break
+                chunk = await proc.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            await _terminate_process(proc)
+
+    return StreamingResponse(
+        generate(),
+        media_type="video/mp4",
+        headers={"Cache-Control": "no-store", "Accept-Ranges": "none", "X-Playback-Mode": "camera"},
+    )
 
 
 @app.get("/recordings/{camera_id}/{filename}")

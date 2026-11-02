@@ -79,3 +79,63 @@ export function resolveLoadedSeek(offsetSec: number, durationSec: number): Loade
 export function timelineMs(startTimestamp: number, timeBaseSec: number, mediaTimeSec: number): number {
   return startTimestamp + (timeBaseSec + Math.max(0, mediaTimeSec)) * 1000;
 }
+
+export interface EdgeSegment {
+  start: string;
+  end: string;
+  track?: string;
+}
+
+export interface EdgePiece {
+  startTimestamp: number;
+  endTimestamp: number;
+  track: string;
+}
+
+/** UTC midnights for instants that no local file covers. */
+export function uncoveredDays(clips: ClipSpan[], pointsMs: number[]): number[] {
+  const days = new Set<number>();
+  for (const point of pointsMs) {
+    if (!Number.isFinite(point)) continue;
+    const inside = clips.some((clip) => point >= clip.startTimestamp && point < clip.endTimestamp);
+    if (inside) continue;
+    const date = new Date(point);
+    days.add(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  }
+  return [...days].sort((a, b) => a - b);
+}
+
+/** Parts of [start, end) that no clip already covers. */
+export function subtractCovered(start: number, end: number, clips: ClipSpan[]): Array<{ start: number; end: number }> {
+  if (!(end > start)) return [];
+  let cursor = start;
+  const pieces: Array<{ start: number; end: number }> = [];
+  const ordered = clips
+    .filter((clip) => clip.endTimestamp > start && clip.startTimestamp < end)
+    .sort((a, b) => a.startTimestamp - b.startTimestamp);
+  for (const clip of ordered) {
+    const left = Math.max(clip.startTimestamp, start);
+    const right = Math.min(clip.endTimestamp, end);
+    if (right <= left) continue;
+    if (left > cursor) pieces.push({ start: cursor, end: left });
+    cursor = Math.max(cursor, right);
+  }
+  if (cursor < end) pieces.push({ start: cursor, end });
+  return pieces.filter((piece) => piece.end - piece.start >= 1000);
+}
+
+/** Camera spans that fall in gaps between recorder files. */
+export function edgePieces(segments: EdgeSegment[], local: ClipSpan[]): EdgePiece[] {
+  const pieces: EdgePiece[] = [];
+  for (const segment of segments) {
+    const start = Date.parse(segment.start);
+    const end = Date.parse(segment.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    const track = segment.track && /^\d+$/.test(segment.track) ? segment.track : '101';
+    for (const gap of subtractCovered(start, end, local)) {
+      pieces.push({ startTimestamp: gap.start, endTimestamp: gap.end, track });
+    }
+  }
+  pieces.sort((a, b) => a.startTimestamp - b.startTimestamp || a.track.localeCompare(b.track));
+  return pieces;
+}

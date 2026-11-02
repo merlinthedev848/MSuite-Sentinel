@@ -10,8 +10,13 @@ from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 from api.config import settings
+from api.database import get_db
+from api.models.camera import Camera
+from api.services.hikvision_playback import search_camera_footage
 from api.services.recorder import list_recordings
 
 router = APIRouter(prefix="/recordings-list", tags=["Recordings"])
@@ -46,6 +51,46 @@ def _parse_ts(dt_str: str) -> datetime:
 async def get_recordings(camera_id: str | None = None):
     """List all recorded MP4 files, checking both hot and cold storage tiers."""
     return await asyncio.to_thread(list_recordings, camera_id)
+
+
+@router.get("/edge")
+async def get_edge_recordings(
+    camera_id: str,
+    start: str,
+    end: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Footage stored on the camera for a gap the recorder does not have.
+
+    The response is start, end, and track. It does not include a playback URL.
+    """
+    start_dt = _parse_ts(start)
+    end_dt = _parse_ts(end)
+    if start_dt >= end_dt:
+        raise HTTPException(status_code=400, detail="Start time must be strictly before end time")
+    if (end_dt - start_dt).total_seconds() > 26 * 3600:
+        raise HTTPException(status_code=400, detail="Search window is limited to one day")
+
+    from api.security import safe_camera_id
+    try:
+        cam_id = safe_camera_id(camera_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid camera id")
+    result = await db.execute(select(Camera).where(Camera.id == cam_id))
+    cam = result.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    rtsp_url = cam.rtsp_url_sub or cam.rtsp_url_main
+    if not rtsp_url:
+        return {"segments": [], "searched": False}
+    segments = await search_camera_footage(
+        rtsp_url,
+        cam.onvif_username,
+        cam.onvif_password,
+        start_dt,
+        end_dt,
+    )
+    return {"segments": segments, "searched": True}
 
 
 @router.post("/export")

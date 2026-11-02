@@ -50,8 +50,8 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
   style,
 }) => {
   const localVideo = useRef<HTMLVideoElement | null>(null);
-  const [mode, setMode] = useState<LiveMode>('connecting');
-  const [snapshotSrc, setSnapshotSrc] = useState('');
+  const stillRef = useRef<HTMLCanvasElement | null>(null);
+  const [mode, setMode] = useState<LiveMode>('snapshot');
 
   useEffect(() => {
     onMode?.(mode);
@@ -152,18 +152,27 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
               const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
               const start = sourceBuffer.buffered.start(0);
               const videoEl = localVideo.current;
-              // Keep about a second. A multi-second backlog is what made live view late.
-              if (end - start > 2.5 && !sourceBuffer.updating) {
-                sourceBuffer.remove(start, end - 1);
-                return;
-              }
-              if (videoEl && end - videoEl.currentTime > 0.45) {
-                videoEl.currentTime = Math.max(0, end - 0.15);
-              }
+              // Jumping to the live edge on every fragment blanks the tile for a
+              // frame, which is the once-a-second flash. A short lag is normal.
+              // Only catch up when the picture is actually late, and only trim
+              // media that is already behind the frame on screen.
               if (videoEl && videoEl.readyState >= 2) {
                 sawFrame = true;
                 setMode('mse');
+                const lag = end - videoEl.currentTime;
+                if (lag > 2.5) {
+                  videoEl.currentTime = Math.max(0, end - 0.3);
+                } else {
+                  videoEl.playbackRate = lag > 1.2 ? 1.05 : 1;
+                }
                 videoEl.play().catch(() => {});
+              }
+              if (videoEl && end - start > 12 && !sourceBuffer.updating) {
+                const trimTo = videoEl.currentTime - 2;
+                if (trimTo - start > 1) {
+                  sourceBuffer.remove(start, trimTo);
+                  return;
+                }
               }
             }
           } catch {
@@ -227,22 +236,45 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
     };
   }, [cameraId, quality, paused]);
 
+  const holdStill = mode === 'connecting' || mode === 'mjpeg' || mode === 'snapshot';
+
   useEffect(() => {
-    if (mode !== 'connecting' && mode !== 'mjpeg' && mode !== 'snapshot') return;
+    if (!holdStill) return;
     let stop = false;
-    const tick = () => {
-      if (stop) return;
-      // Camera picture API via the API. go2rtc's frame.jpeg waits for the next
-      // IDR and then starts ffmpeg, which is the multi-second blank tile.
-      setSnapshotSrc(apiUrl(`/cameras/${encodeURIComponent(cameraId)}/snapshot?t=${Date.now()}`));
+    let pending = false;
+    const paint = () => {
+      if (stop || pending) return;
+      pending = true;
+      const img = new Image();
+      img.onload = () => {
+        pending = false;
+        if (stop) return;
+        const canvas = stillRef.current;
+        if (!canvas) return;
+        const width = img.naturalWidth || canvas.width;
+        const height = img.naturalHeight || canvas.height;
+        if (width > 0 && height > 0 && (canvas.width !== width || canvas.height !== height)) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+        const ctx = canvas.getContext('2d');
+        if (!ctx || canvas.width < 1 || canvas.height < 1) return;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      };
+      img.onerror = () => {
+        pending = false;
+      };
+      // The previous canvas stays until this JPEG has decoded. Replacing the
+      // img element, or hiding it on a miss, is what flashed the black tile.
+      img.src = apiUrl(`/cameras/${encodeURIComponent(cameraId)}/snapshot?t=${Date.now()}`);
     };
-    tick();
-    const timer = window.setInterval(tick, 700);
+    paint();
+    const timer = window.setInterval(paint, 1000);
     return () => {
       stop = true;
       window.clearInterval(timer);
     };
-  }, [mode, cameraId]);
+  }, [holdStill, cameraId]);
 
   const setNode = (node: HTMLVideoElement | null) => {
     localVideo.current = node;
@@ -269,15 +301,10 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
         muted={muted}
         style={{ ...mediaStyle, opacity: mode === 'mse' ? 1 : 0 }}
       />
-      {(mode === 'connecting' || mode === 'mjpeg' || mode === 'snapshot') && snapshotSrc && (
-        <img
-          key={snapshotSrc}
-          src={snapshotSrc}
-          alt=""
-          style={{ ...mediaStyle, position: 'absolute', inset: 0 }}
-          onError={(event) => { event.currentTarget.style.display = 'none'; }}
-        />
-      )}
+      <canvas
+        ref={stillRef}
+        style={{ ...mediaStyle, position: 'absolute', inset: 0, visibility: holdStill ? 'visible' : 'hidden' }}
+      />
     </div>
   );
 };
