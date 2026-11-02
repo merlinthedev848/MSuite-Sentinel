@@ -15,6 +15,12 @@ class MotionGating:
         self.threshold = threshold
         logger.info("Motion Gating Engine Initialized.")
 
+    def reset(self) -> None:
+        """Drop the background model when the detector moves to another camera."""
+        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+            history=500, varThreshold=16, detectShadows=False
+        )
+
     def has_motion(self, frame: np.ndarray) -> bool:
         """
         Returns True if motion (pixel change) exceeds the threshold.

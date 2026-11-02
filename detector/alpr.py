@@ -17,17 +17,9 @@ class ALPREngine:
         # In a real deployment, we'd load LPRNet or a Tesseract wrapper here.
         # e.g., self.reader = easyocr.Reader(['en'], gpu=self.use_gpu)
 
-    def extract_plate(self, vehicle_image: np.ndarray) -> str:
-        """
-        Takes a cropped image of a vehicle, detects the plate region, and runs OCR.
-        """
-        # Mocking the ALPR extraction for the pipeline stub
-        # Real implementation: return self.reader.readtext(vehicle_image)
-        logger.debug("Scanning vehicle for license plate...")
-        
-        # Simulate an OCR hit
-        # In reality, this would return None if no plate is visible.
-        mock_plate = "ABC 123"
-        return mock_plate
+    def extract_plate(self, vehicle_image: np.ndarray) -> str | None:
+        """No OCR engine is installed, so this never invents a plate."""
+        logger.info("ALPR is not configured; no license plate was read")
+        return None
 
 alpr_engine = ALPREngine()

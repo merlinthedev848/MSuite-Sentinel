@@ -17,5 +17,5 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - ACCELERATOR=cuda
 
-  # If we were running a specific TimescaleDB or Postgres build with GPU for pgvector
-  # it would go here, but pgvector usually runs on CPU.
+  # This override requests an NVIDIA device. The detector image in this
+  # repository is the CPU PyTorch build unless it is rebuilt with CUDA wheels.

@@ -5,7 +5,7 @@ import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
 export default function App() {
   const [serverUrl, setServerUrl] = useState('');
   const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin');
+  const [password, setPassword] = useState('');
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [isConnected, setIsConnected] = useState(false);
@@ -29,7 +29,7 @@ export default function App() {
 
   const loginToServer = async (url: string, user: string, pass: string): Promise<string | null> => {
     try {
-      const body = `username=${encodeURIComponent(user.trim() || 'admin')}&password=${encodeURIComponent(pass || 'admin')}`;
+      const body = `username=${encodeURIComponent(user.trim())}&password=${encodeURIComponent(pass)}`;
       const res = await fetch(`${url}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

@@ -45,7 +45,7 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
   const [events,  setEvents]  = useState<any[]>([]);
   const [storage, setStorage] = useState<any>(null);
   const [recordingStorage, setRecordingStorage] = useState<any>(null);
-  const [systemStats, setSystemStats] = useState({ cpu: '--', up: '0.00', down: '0.00', latency: '--' });
+  const [systemStats, setSystemStats] = useState({ cpu: '--', up: '0.00', down: '0.00', latency: '--', network: '--', codec: '--' });
   const [audioEnabled, setAudioEnabled] = useState(() => audioAlerts.isEnabled());
 
   useEffect(() => {
@@ -63,6 +63,8 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
           up: typeof h.network?.up_mbps === 'number' ? h.network.up_mbps.toFixed(2) : '0.00',
           down: typeof h.network?.down_mbps === 'number' ? h.network.down_mbps.toFixed(2) : '0.00',
           latency: typeof h.latency_ms === 'number' ? `${h.latency_ms}` : '--',
+          network: h.status === 'online' ? 'OK' : 'DEGRADED',
+          codec: h.record_codec || '--',
         });
       }
     };
@@ -86,6 +88,8 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
             up: typeof h.network?.up_mbps === 'number' ? h.network.up_mbps.toFixed(2) : '0.00',
             down: typeof h.network?.down_mbps === 'number' ? h.network.down_mbps.toFixed(2) : '0.00',
             latency: `${Math.round(performance.now() - started)}`,
+            network: h.status === 'online' ? 'OK' : 'DEGRADED',
+            codec: h.record_codec || '--',
           });
         }
       } catch {}
@@ -203,14 +207,14 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <Wifi size={13} color="var(--t3)" />
             <span style={{ fontSize: '0.74rem', color: 'var(--t2)' }}>Network</span>
-            <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: 'var(--green)' }}>OK</span>
+            <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: systemStats.network === 'OK' ? 'var(--green)' : 'var(--t2)' }}>{systemStats.network}</span>
           </div>
           <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 4, columnGap: 8, fontSize: '0.66rem', color: 'var(--t3)', fontFamily: 'JetBrains Mono, monospace' }}>
             <span>CPU</span><span style={{ color: 'var(--t2)' }}>{systemStats.cpu}%</span>
             <span>Up</span><span style={{ color: 'var(--cyan)' }}>{systemStats.up} Mbps</span>
             <span>Down</span><span style={{ color: 'var(--cyan)' }}>{systemStats.down} Mbps</span>
             <span>Latency</span><span style={{ color: 'var(--t2)' }}>{systemStats.latency} ms</span>
-            <span>Codec</span><span style={{ color: 'var(--green)' }}>H.264</span>
+            <span>Codec</span><span style={{ color: 'var(--t2)' }}>{systemStats.codec}</span>
           </div>
         </div>
       </nav>

@@ -1,12 +1,22 @@
 services:
+  secrets-init:
+    image: alpine:3.20
+    container_name: sentinel-secrets
+    volumes:
+      - sentinel_secrets:/secrets
+      - ./docker/bootstrap-secrets.sh:/bootstrap-secrets.sh:ro
+    entrypoint: ["/bin/sh", "/bootstrap-secrets.sh"]
+    restart: "no"
+
   go2rtc:
     image: alexxit/go2rtc:1.9.14
     container_name: sentinel-go2rtc
     network_mode: host
-    security_opt:
-      - apparmor=unconfined
     volumes:
-      - ./go2rtc.yaml:/config/go2rtc.yaml
+      - sentinel_secrets:/config
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   api:
@@ -15,11 +25,10 @@ services:
       dockerfile: api/Dockerfile
     container_name: sentinel-api
     network_mode: host          # Host networking so ONVIF UDP multicast reaches LAN cameras
-    security_opt:
-      - apparmor=unconfined
+    entrypoint: ["/entrypoint-api.sh"]
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     environment:
-      - DATABASE_URL=postgresql+asyncpg://sentinel:sentinel@127.0.0.1:5432/sentinelnvr
-      - REDIS_URL=redis://127.0.0.1:6379/0
+      - SENTINEL_SECRETS_DIR=/run/sentinel/secrets
       - MQTT_BROKER=127.0.0.1
       - RECORDINGS_DIR=/mnt/storage/mview/recordings
       - SEGMENT_SECONDS=60
@@ -29,12 +38,12 @@ services:
       - RECORD_VIDEO_PRESET=veryfast
     volumes:
       - /mnt/storage/mview/recordings:/mnt/storage/mview/recordings
-      - /var/run/docker.sock:/var/run/docker.sock
       - /opt/mview-sentinel:/opt/mview-sentinel
+      - sentinel_secrets:/run/sentinel/secrets
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       mqtt:
         condition: service_started
@@ -46,38 +55,46 @@ services:
       dockerfile: Dockerfile
     container_name: sentinel-detector
     network_mode: host
-    security_opt:
-      - apparmor=unconfined
+    entrypoint: ["/entrypoint.sh"]
     environment:
+      - SENTINEL_SECRETS_DIR=/run/sentinel/secrets
       - MQTT_BROKER=127.0.0.1
       - MQTT_PORT=1883
-      - STREAM_URL=rtsp://127.0.0.1:8554/camera1
-      - CAMERA_ID=default_cam
+      - API_URL=http://127.0.0.1:8000/cameras
       - ACCELERATOR=cpu
       - DETECTOR_MODEL=yolov8n.pt
       - FRAME_STRIDE=6
+      - FRAMES_PER_CAMERA=48
       - IMAGE_SIZE=640
       - MIN_CONFIDENCE=0.5
       - EVENT_COOLDOWN_SECONDS=5
       - DETECT_CLASSES=0,2,3,5,7
+    volumes:
+      - sentinel_secrets:/run/sentinel/secrets:ro
     depends_on:
-      - mqtt
-      - go2rtc
+      secrets-init:
+        condition: service_completed_successfully
+      mqtt:
+        condition: service_started
+      go2rtc:
+        condition: service_started
     restart: unless-stopped
 
   postgres:
     image: pgvector/pgvector:pg18
     container_name: sentinel-postgres
-    security_opt:
-      - apparmor=unconfined
     environment:
       - POSTGRES_USER=sentinel
-      - POSTGRES_PASSWORD=sentinel
+      - POSTGRES_PASSWORD_FILE=/run/sentinel/secrets/postgres_password
       - POSTGRES_DB=sentinelnvr
     volumes:
       - postgres_data:/var/lib/postgresql
+      - sentinel_secrets:/run/sentinel/secrets:ro
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinelnvr"]
@@ -86,33 +103,23 @@ services:
       retries: 10
       start_period: 10s
 
-  redis:
-    image: redis:8.2-alpine
-    container_name: sentinel-redis
-    security_opt:
-      - apparmor=unconfined
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   mqtt:
     image: eclipse-mosquitto:2.1.2-alpine
     container_name: sentinel-mqtt
-    security_opt:
-      - apparmor=unconfined
     volumes:
-      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./docker/entrypoint-mqtt.sh:/entrypoint-mqtt.sh:ro
+      - sentinel_secrets:/run/sentinel/secrets:ro
+      - mqtt_data:/mosquitto/data
     ports:
-      - "1883:1883"
+      - "127.0.0.1:1883:1883"
+    entrypoint: ["/bin/sh", "/entrypoint-mqtt.sh"]
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
   postgres_data:
-  redis_data:
+  mqtt_data:
+  sentinel_secrets:

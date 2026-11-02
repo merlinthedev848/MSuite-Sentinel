@@ -16,19 +16,25 @@ class StorageTierMigration:
     """
     def __init__(self):
         self.hot_storage_dir = Path(getattr(settings, "recordings_dir", os.getenv("HOT_STORAGE_PATH", "/mnt/storage/mview/recordings")))
-        self.cold_storage_dir = Path(os.getenv("COLD_STORAGE_PATH", "/mnt/archive/mview/recordings"))
+        raw_cold = os.getenv("COLD_STORAGE_PATH", "").strip()
+        self.cold_storage_dir = Path(raw_cold) if raw_cold else None
         self.migrate_after_days = int(os.getenv("MIGRATE_AFTER_DAYS", "3"))
 
     def run_migration(self) -> dict:
-        """Scan hot storage and move files older than threshold to cold storage."""
+        """Move aged recordings only when cold storage was explicitly configured."""
+        if self.cold_storage_dir is None:
+            return {"files_migrated": 0, "bytes_migrated": 0, "enabled": False}
         if not self.hot_storage_dir.exists():
-            return {"files_migrated": 0, "bytes_migrated": 0}
+            return {"files_migrated": 0, "bytes_migrated": 0, "enabled": True}
 
         try:
             self.cold_storage_dir.mkdir(parents=True, exist_ok=True)
+            probe = self.cold_storage_dir / ".write-test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
         except Exception as e:
             logger.error(f"Cold storage not accessible at {self.cold_storage_dir}: {e}")
-            return {"files_migrated": 0, "bytes_migrated": 0, "error": str(e)}
+            return {"files_migrated": 0, "bytes_migrated": 0, "enabled": True, "error": str(e)}
 
         cutoff_time = datetime.now(timezone.utc) - timedelta(days=self.migrate_after_days)
         files_migrated = 0

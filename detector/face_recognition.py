@@ -21,20 +21,9 @@ class FaceRecognitionEngine:
         logger.info(f"Face Engine loaded. Embedding dimension: {self.vector_dim}")
 
     def extract_faces(self, frame: np.ndarray):
-        """
-        Detects faces in a frame and returns their bounding boxes, landmarks, and embeddings.
-        """
-        # Real implementation: return self.face_analyzer.get(frame)
-        logger.debug("Extracting faces from frame...")
-        # Simulating one detected face
-        mock_embedding = np.random.rand(self.vector_dim).astype(np.float32)
-        mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-        
-        return [{
-            "bbox": [100, 100, 250, 250],
-            "confidence": 0.98,
-            "embedding": mock_embedding
-        }]
+        """InsightFace is not installed, so this returns no faces."""
+        logger.info("Face recognition is not configured; no face was returned")
+        return []
 
     def compare_faces(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """

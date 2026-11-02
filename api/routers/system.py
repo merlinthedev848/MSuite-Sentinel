@@ -239,55 +239,22 @@ async def _build_update_status() -> dict:
 
 
 def _start_update_process(install_dir: Path, manifest_url: str) -> None:
-    script = """
-import json
-import pathlib
-import subprocess
-import sys
-import time
-import urllib.request
-
-install_dir = pathlib.Path(sys.argv[1])
-manifest_url = sys.argv[2]
-time.sleep(2)
-
-request = urllib.request.Request(manifest_url, headers={"User-Agent": "mView-Sentinel-Updater/1.0"})
-with urllib.request.urlopen(request, timeout=20) as response:
-    manifest = json.loads(response.read(1024 * 1024).decode("utf-8"))
-github = manifest.get("github") if isinstance(manifest.get("github"), dict) else {}
-repo = manifest.get("repository") or manifest.get("repo") or manifest.get("github_repo") or github.get("repository") or github.get("repo") or "origin"
-target = manifest.get("sha") or manifest.get("commit") or manifest.get("commit_sha") or manifest.get("latest_sha") or github.get("sha") or github.get("commit")
-ref = manifest.get("ref") or manifest.get("tag") or manifest.get("branch") or github.get("ref") or github.get("tag") or github.get("branch") or "main"
-remote = "origin"
-if repo and repo != "origin":
-    subprocess.run(["git", "remote", "set-url", "origin", repo], cwd=install_dir, check=False)
-subprocess.run(["git", "fetch", "--prune", remote], cwd=install_dir, check=True)
-checkout_target = target or f"{remote}/{ref}"
-subprocess.run(["git", "reset", "--hard", checkout_target], cwd=install_dir, check=True)
-subprocess.run(["git", "clean", "-fd", "--exclude", "sentinel.yml", "--exclude", ".env"], cwd=install_dir, check=True)
-if (install_dir / "docker-compose.yml").is_file():
-    subprocess.run(["docker", "compose", "up", "-d", "--build"], cwd=install_dir, check=True)
-"""
-    import subprocess
-    subprocess.Popen(
-        [sys.executable, "-c", script, str(install_dir), manifest_url],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=os.name != "nt",
+    """Refuse unattended git reset and image rebuilds from an unsigned manifest."""
+    raise RuntimeError(
+        "Automatic updates are disabled. Review the manifest at "
+        f"{manifest_url} and update {install_dir} from the host."
     )
 
 
 @router.get("/health")
 async def get_system_health():
-    """Retrieve CPU, RAM, and Disk health statistics."""
-    snapshot = await local_core.get_snapshot()
-    if snapshot.get("health"):
-        return snapshot["health"]
-
+    """Retrieve host stats plus the real state of the database, MQTT, and go2rtc."""
     cpu_percent = psutil.cpu_percent(interval=None)
     memory = psutil.virtual_memory()
     net = psutil.net_io_counters()
-    
+    snapshot = await local_core.get_snapshot()
+    snapshot_health = snapshot.get("health") if isinstance(snapshot.get("health"), dict) else {}
+
     storage_path = settings.storage_path
     try:
         total, used, free = shutil.disk_usage(storage_path)
@@ -296,15 +263,20 @@ async def get_system_health():
     total_gb = round(total / (1024**3), 2)
     used_gb = round(used / (1024**3), 2)
     free_gb = round(free / (1024**3), 2)
+    from api.services.probes import dependency_status
+    dependencies = await dependency_status()
 
     return {
-        "status": "online",
+        **dependencies,
         "cpu_usage_percent": cpu_percent,
         "memory_usage_percent": memory.percent,
         "memory_total_gb": round(memory.total / (1024**3), 2),
         "network": {
             "bytes_sent": net.bytes_sent,
             "bytes_recv": net.bytes_recv,
+            "up_mbps": snapshot_health.get("network", {}).get("up_mbps", 0),
+            "down_mbps": snapshot_health.get("network", {}).get("down_mbps", 0),
+            "ok": dependencies["status"] == "online",
         },
         "storage": {
             "path": storage_path,
@@ -470,9 +442,12 @@ async def vacuum_database(db: AsyncSession = Depends(get_db)):
     try:
         if _engine.dialect.name == "postgresql":
             await db.execute(text("ANALYZE;"))
+            message = "PostgreSQL statistics were refreshed with ANALYZE."
         else:
+            await db.commit()
             await db.execute(text("VACUUM;"))
-        return {"status": "success", "message": "Database query statistics re-indexed."}
+            message = "SQLite VACUUM completed."
+        return {"status": "success", "message": message}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -504,18 +479,9 @@ async def update_system_config(config: SystemConfigUpdate):
         raise HTTPException(500, f"Failed to write configuration: {e}")
         
     settings.retention_days = config.retention_days
-    for key, value in config.ai.model_dump().items():
-        if key in ("ai_provider", "gemini_api_key", "openai_api_key"):
-            if hasattr(settings, key):
-                setattr(settings, key, value)
-        else:
-            setting_name = f"ai_{key}"
-            if hasattr(settings, setting_name):
-                setattr(settings, setting_name, value)
-    for key, value in config.network.model_dump().items():
-        setting_name = f"network_{key}"
-        if hasattr(settings, setting_name):
-            setattr(settings, setting_name, value)
+    settings.ai_provider = config.ai.ai_provider
+    settings.gemini_api_key = config.ai.gemini_api_key
+    settings.openai_api_key = config.ai.openai_api_key
 
     return {"status": "success", **config.model_dump()}
 
@@ -568,7 +534,10 @@ async def factory_reset(
             pass
 
     await local_core.refresh_snapshot(include_storage=True)
-    return {"status": "success", "message": "Factory reset complete. System will now restart."}
+    return {
+        "status": "success",
+        "message": "Factory reset complete. Recordings, cameras, and configuration were cleared. The process is still running.",
+    }
 
 
 @router.post("/restart")
@@ -576,35 +545,10 @@ async def restart_services(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can restart services")
 
-    install_dir = Path("/opt/mview-sentinel")
-    if not install_dir.is_dir() or not (install_dir / "docker-compose.yml").is_file():
-        install_dir = Path(os.getcwd())
-    if not (install_dir / "docker-compose.yml").is_file():
-        raise HTTPException(status_code=400, detail="docker-compose.yml not found; restart is unavailable here")
-    if not shutil.which("docker"):
-        raise HTTPException(status_code=400, detail="Docker is not available in this environment")
-
-    script = """
-import pathlib
-import subprocess
-import sys
-import time
-
-install_dir = pathlib.Path(sys.argv[1])
-time.sleep(2)
-subprocess.run(["docker", "compose", "restart", "api", "detector"], cwd=install_dir, check=True)
-"""
-    try:
-        import subprocess
-        subprocess.Popen(
-            [sys.executable, "-c", script, str(install_dir)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=os.name != "nt",
-        )
-        return {"status": "success", "message": "Restart initiated for API and detector services."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start restart process: {e}")
+    return {
+        "status": "manual",
+        "message": "Restart the API process from the host. This service does not control Docker.",
+    }
 
 
 @router.get("/updates/check")
@@ -633,15 +577,13 @@ async def install_updates(current_user: dict = Depends(get_current_user)):
             **status_payload,
         }
 
-    try:
-        _start_update_process(install_dir, status_payload["manifest_url"])
-        return {
-            "status": "success",
-            "message": "Update download initiated. The NVR will pull the manifest target from GitHub and rebuild in the background.",
-            **status_payload,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start update process: {e}")
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Automatic install is disabled. Update the checkout on the host. "
+            f"Manifest: {status_payload.get('manifest_url')}."
+        ),
+    )
 
 
 @router.post("/updates/auto-run")

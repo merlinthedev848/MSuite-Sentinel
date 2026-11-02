@@ -138,6 +138,7 @@ async def update_password(
             raise HTTPException(status_code=400, detail="Current password is incorrect")
 
     user.hashed_password = get_password_hash(payload.new_password)
+    user.token_version = int(user.token_version or 0) + 1
     await db.commit()
     return {"status": "updated"}
 
@@ -172,6 +173,7 @@ async def update_user(
 
     if payload.password is not None:
         user.hashed_password = get_password_hash(payload.password)
+        user.token_version = int(user.token_version or 0) + 1
 
     await db.commit()
     await db.refresh(user)

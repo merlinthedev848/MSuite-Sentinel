@@ -23,6 +23,22 @@ from api.config import settings
 
 log = logging.getLogger("sentinel")
 
+
+def _ensure_user_token_version(sync_conn) -> None:
+    """Add token_version to databases created before password revocation existed."""
+    from sqlalchemy import inspect
+    from sqlalchemy import text as sql_text
+
+    inspector = inspect(sync_conn)
+    if "users" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("users")}
+    if "token_version" in columns:
+        return
+    sync_conn.execute(sql_text(
+        "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"
+    ))
+
 # Fetch JWT config directly for the middleware
 SECRET_KEY = settings.jwt_secret
 ALGORITHM = settings.jwt_algorithm
@@ -60,31 +76,28 @@ async def retention_worker():
 
 
 async def auto_update_worker():
-    """Periodically check the Sentinel update manifest and start an update when enabled."""
-    log.info("Starting auto-update background loop...")
+    """Report when a manifest lists a newer build. Installation stays with the operator."""
+    log.info("Starting update-check background loop...")
     while True:
-        sleep_seconds = 3600  # default fallback interval
+        sleep_seconds = 3600
         try:
-            from api.routers.system import _build_update_status, _compose_config, _install_dir, _read_config_file, _start_update_process
+            from api.routers.system import _build_update_status, _compose_config, _read_config_file
             config = _compose_config(_read_config_file())
             sleep_seconds = max(15, config.updates.check_interval_minutes) * 60
             if config.updates.auto_download:
                 status_payload = await _build_update_status()
                 if status_payload.get("update_available") and not status_payload.get("error"):
-                    log.info(
-                        "Update available from manifest %s: %s -> %s",
-                        status_payload.get("manifest_url"),
-                        status_payload.get("current_sha"),
+                    log.warning(
+                        "Update %s is listed by %s. Automatic git reset and image rebuild are disabled; install it on the host.",
                         status_payload.get("latest_sha"),
+                        status_payload.get("manifest_url"),
                     )
-                    _start_update_process(_install_dir(), status_payload["manifest_url"])
-                    return
-                if status_payload.get("error"):
-                    log.warning("Auto-update check failed: %s", status_payload["error"])
+                elif status_payload.get("error"):
+                    log.warning("Update check failed: %s", status_payload["error"])
         except asyncio.CancelledError:
             break
         except Exception as e:
-            log.error("Error in auto-update worker: %s", e)
+            log.error("Error in update-check worker: %s", e)
             sleep_seconds = 3600
         await asyncio.sleep(sleep_seconds)
 
@@ -104,26 +117,47 @@ async def lifespan(app: FastAPI):
         if engine.url.get_backend_name().startswith("postgresql"):
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_user_token_version)
         await conn.execute(text(
             'CREATE INDEX IF NOT EXISTS ix_semantic_events_camera_ts '
             'ON semantic_events (camera_id, "timestamp" DESC)'
         ))
 
-    # Seed a default admin user the first time the database starts.
+    for directory in (
+        settings.export_path,
+        settings.thumbnail_path,
+        settings.snapshot_path,
+        settings.recordings_dir,
+        str(Path(settings.storage_path) / "maps"),
+    ):
+        try:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            log.warning("Storage directory %s is not writable: %s", directory, exc)
+
+    # Seed an admin user only when the users table is empty.
     from api.database import async_session_maker as AsyncSessionLocal
     from api.routers.auth import get_password_hash
+    from api.secrets_bootstrap import ensure_admin_password
     async with AsyncSessionLocal() as db:
         existing_users = await db.execute(select(User.id).limit(1))
         if existing_users.scalar_one_or_none() is None:
-            admin_password = os.getenv("ADMIN_PASSWORD", settings.default_admin_password)
+            admin_password, password_path, created = ensure_admin_password()
             db.add(User(
                 username=settings.default_admin_username,
                 hashed_password=get_password_hash(admin_password),
                 role="admin",
                 permissions=["live", "playback", "events", "settings", "operations"],
+                token_version=0,
             ))
             await db.commit()
-            log.info("Seeded default admin user.")
+            log.warning(
+                "Created the first admin user '%s'. The password is in %s. The password admin is not accepted.",
+                settings.default_admin_username,
+                password_path,
+            )
+            if created:
+                log.warning("Read that file once, store the password, and keep the file private.")
 
     # Check frontend
     dist = Path(__file__).parent.parent / "web" / "dist"
@@ -140,6 +174,8 @@ async def lifespan(app: FastAPI):
         cams = result.scalars().all()
     await recorder_manager.sync_cameras(cams)
     log.info(f"Recorder started for {len(cams)} camera(s).")
+    from api.services.ha_discovery import publish_camera_discovery
+    background_discovery = asyncio.create_task(publish_camera_discovery(cams), name="ha-discovery")
 
     # Start retention, storage migration, and background workers
     from api.services.storage_tier_migration import storage_migration_worker
@@ -149,8 +185,10 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(storage_migration_worker(), name="storage-migration-worker"),
         asyncio.create_task(auto_update_worker(), name="auto-update-worker"),
     ]
-    from api.services.event_processor import process_mqtt_events
+    from api.services.event_processor import process_mqtt_events, signal_watchdog
     background_tasks.append(asyncio.create_task(process_mqtt_events(), name="mqtt-event-processor"))
+    background_tasks.append(asyncio.create_task(signal_watchdog(), name="signal-watchdog"))
+    background_tasks.append(background_discovery)
 
 
     try:
@@ -168,12 +206,21 @@ async def lifespan(app: FastAPI):
         log.info("Sentinel shutdown complete.")
 
 
-app = FastAPI(title="mView Sentinel", version="1.0.0", lifespan=lifespan)
+_docs_enabled = bool(settings.enable_docs)
+app = FastAPI(
+    title="mView Sentinel",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 
+_cors_origins = [origin for origin in settings.cors_origins if origin and origin != "*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=bool(_cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -217,18 +264,13 @@ async def auth_and_security_middleware(request: Request, call_next):
     if request.method == "PATCH" and _re.match(r'^/users/[^/]+/password$', path):
         required = None  # just needs a valid JWT — enforced inside the route handler
 
-    is_loopback = bool(
-        request.client
-        and request.client.host in ("127.0.0.1", "::1", "localhost")
-        and not request.headers.get("X-Forwarded-For")
-    )
+    public_docs = _docs_enabled and path in ("/docs", "/redoc", "/openapi.json")
     is_public = (
-        is_loopback or
         path.startswith("/system/health") or
         path.startswith("/auth/login") or
         path.startswith("/static/") or
         path.startswith("/assets/") or
-        path in ("/docs", "/redoc", "/openapi.json")
+        public_docs
     )
     is_media_token_path = (
         path.startswith("/recordings/") or
@@ -249,16 +291,15 @@ async def auth_and_security_middleware(request: Request, call_next):
         if not token:
             return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
 
-        try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            if not payload.get("sub"):
-                return JSONResponse(status_code=401, content={"detail": "Invalid token payload"})
-            if payload.get("role") != "admin":
-                user_permissions = set(payload.get("permissions") or [])
-                if not user_permissions.intersection(required):
-                    return JSONResponse(status_code=403, content={"detail": "Permission denied"})
-        except JWTError:
+        from api.routers.auth import open_principal
+        principal = await open_principal(token)
+        if principal is None:
             return JSONResponse(status_code=401, content={"detail": "Invalid token"})
+        request.state.user = principal
+        if principal.get("role") != "admin":
+            user_permissions = set(principal.get("permissions") or [])
+            if not user_permissions.intersection(required):
+                return JSONResponse(status_code=403, content={"detail": "Permission denied"})
             
     response = await call_next(request)
     response.headers["X-Frame-Options"] = "DENY"
@@ -542,7 +583,7 @@ FALLBACK_HTML = """<!DOCTYPE html>
   <h1>⬡ mView Sentinel</h1>
   <p>The API is running but the frontend was not compiled into this image.<br>
      Check your Docker build logs, then redeploy:</p>
-  <code>cd /opt/mview-sentinel && docker compose up -d --build</code>
+  <p>Rebuild the web bundle and include web/dist in the image.</p>
   <p style="margin-top:24px">API health: <a style="color:#00f0d4" href="/system/health">/system/health</a></p>
 </body>
 </html>"""
@@ -551,10 +592,13 @@ FALLBACK_HTML = """<!DOCTYPE html>
 @app.get("/{full_path:path}")
 async def serve_spa(request: Request, full_path: str):
     """Catch-all: serve the React SPA, or a useful fallback if not built yet."""
+    if not _docs_enabled and full_path in ("docs", "redoc", "openapi.json"):
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
     # Try to serve a real file from dist first
     if DIST.exists() and full_path:
-        candidate = DIST / full_path
-        if candidate.exists() and candidate.is_file():
+        from api.security import contained_path
+        candidate = contained_path(DIST, DIST / full_path)
+        if candidate is not None and candidate.is_file():
             return FileResponse(str(candidate))
 
     # Serve index.html for all SPA routes

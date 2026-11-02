@@ -1,38 +1,30 @@
-# mView Sentinel Master Configuration
-# This file overrides default environment variables and provides structured config
+# mView Sentinel configuration.
+# Environment variables override these values.
+# Leave jwt_secret unset. A random secret is created on first start.
+# The public placeholders CHANGE-ME-IN-PRODUCTION-USE-RANDOM-SECRET and
+# super-secret-mview-key are rejected.
 
 system:
-  database_url: "postgresql+asyncpg://mview:mview@localhost:5432/mview"
-  mqtt_broker: "localhost"
-  redis_url: "redis://localhost:6379/0"
+  # Compose builds DATABASE_URL from the generated Postgres password.
+  mqtt_broker: "127.0.0.1"
   storage_path: "/mnt/storage/mview"
-  jwt_secret: "super-secret-mview-key"
 
 ai:
-  # Hardware acceleration: auto, cpu, cuda, openvino
-  accelerator: "auto"
-  # Models: yolov8n, yolov8s, yolo11n
+  # The default image runs YOLO on CPU. CUDA is a separate compose override.
+  accelerator: "cpu"
   object_model: "yolov8n"
   min_confidence: 0.5
-  
-  # Secondary pipelines
-  enable_alpr: true
-  enable_face_recognition: true
+  # ALPR and face recognition are not installed. Leaving these on does not invent plates or faces.
+  enable_alpr: false
+  enable_face_recognition: false
+  provider: "local"
 
 recordings:
-  # Global retention policy (days). Overridden by camera-specific settings.
   retention_days: 14
   segment_length_seconds: 60
 
 notifications:
-  # Global notification rules
   discord_webhook: ""
   telegram_bot_token: ""
-  
-cameras:
-  # Pre-configured cameras if you don't want to use Auto-Discovery
-  # - id: "front_door"
-  #   name: "Front Door 4K"
-  #   rtsp_url: "rtsp://admin:pass@192.168.1.100:554/stream1"
-  #   substream_url: "rtsp://admin:pass@192.168.1.100:554/stream2"
-  #   enabled: true
+
+cameras: []

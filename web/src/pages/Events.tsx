@@ -58,7 +58,8 @@ const Events: React.FC = () => {
         body: JSON.stringify({ query: searchQuery }),
       });
       if (res.ok) {
-        setEvents(await res.json());
+        const body = await res.json();
+        setEvents(Array.isArray(body) ? body : (body.results || []));
       } else {
         const err = await res.json().catch(() => ({}));
         console.warn('Vector search returned error:', err);
@@ -118,7 +119,7 @@ const Events: React.FC = () => {
             <input
               className="form-input"
               style={{ paddingLeft: 34, paddingRight: searchQuery ? 28 : 10, height: 32, fontSize: '0.78rem' }}
-              placeholder="AI Vector Search (e.g. 'person in red jacket' or 'car')..."
+              placeholder="Keyword search (e.g. person or car)..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
             />
@@ -224,7 +225,7 @@ const Events: React.FC = () => {
                       background: 'rgba(16, 185, 129, 0.15)', color: '#10b981',
                       border: '1px solid rgba(16, 185, 129, 0.3)', marginRight: 6
                     }}>
-                      {Math.round(ev.match_score * 100)}% Vector Match
+                      {Math.round(ev.match_score * 100)}% label match
                     </span>
                   )}
                   {ev.confidence != null && (

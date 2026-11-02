@@ -8,46 +8,43 @@
 
 ---
 
-## 🚀 One-Command Install (Linux)
+## Install
 
-To deploy mView Sentinel on any Ubuntu/Debian system, run:
+Clone the repository and run `install.sh` from that checkout. The script fast-forwards `main` and starts Compose. It does not reset the worktree.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/merlinthedev848/mview/main/install.sh | bash
+git clone https://github.com/merlinthedev848/MSuite-Sentinel.git /opt/mview-sentinel
+cd /opt/mview-sentinel
+bash install.sh
 ```
 
-The installer will automatically:
-- Install Docker and Docker Compose (if missing).
-- Detect your hardware (NVIDIA GPU, Intel CPU, Google Coral TPU).
-- Create persistent storage volumes in `/mnt/storage/mview`.
-- Boot the cluster!
+The dashboard is served by the API at `http://127.0.0.1:8000`. The first admin password is random and is written to the secrets volume. `admin` / `admin` does not sign in.
 
-**Dashboard URL:** `http://localhost:5173`
-**API URL:** `http://localhost:8000`
+Postgres, MQTT, and go2rtc bind to `127.0.0.1`. The API uses host networking so ONVIF discovery can see cameras, and it requires a login.
 
 ---
 
-## ✨ Killer Features
+## What the default install actually does
 
-- 🧠 **Semantic Search:** Find clips using natural language (e.g., *"Person in a red jacket"*).
-- 👤 **Face Recognition:** Powered by InsightFace and `pgvector`.
-- ⚡ **Lightning Fast Live View:** Sub-second WebRTC streaming via `go2rtc` multiplexing.
-- 🏎️ **Hardware AI:** YOLOv8/11 object detection running on NVIDIA CUDA/TensorRT, Intel OpenVINO, or Google Coral EdgeTPU.
-- 💾 **Zero-Copy Recording:** Highly optimized Rust engine writes MP4 segments direct to disk without CPU-heavy re-encoding.
-- 🏠 **Home Assistant Native:** Automatic MQTT discovery for cameras and AI motion sensors.
-- 🎨 **Premium React UI:** Glassmorphism, dark mode, smooth animations, customizable camera grids, and a scrubbing playback timeline.
+- Live view plays go2rtc MPEG-TS/fMP4 or MJPEG through the API proxy.
+- Recording is ffmpeg, started by the API, writing MP4 segments. The default codec is `copy`.
+- Object detection is Ultralytics YOLO on CPU. It rotates across adopted cameras. `docker-compose.gpu.yml` requests an NVIDIA device, and the published detector image is still the CPU build.
+- Event search matches stored object labels. CLIP, InsightFace, and ALPR are not installed, and the server does not invent embeddings, faces, or plates.
+- Local scene text is a keyword table. Gemini or OpenAI run only when a key is configured.
+- Home Assistant MQTT discovery is published for enabled cameras when the broker is up. It does not include stream passwords.
+- The database is PostgreSQL with the pgvector extension available. TimescaleDB is not part of this stack.
+- Cold storage is off until `COLD_STORAGE_PATH` is set. Retention deletes expired files from both the hot directory and that cold directory.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-mView Sentinel is built as a highly scalable microservice stack:
-1. **Frontend:** React + Vite + TypeScript
-2. **Backend API:** Python FastAPI + JWT Auth
-3. **Database:** PostgreSQL + TimescaleDB + `pgvector`
-4. **Recording Engine:** Rust + FFmpeg
-5. **AI Detection:** Python (Ultralytics YOLO, ByteTrack, CLIP, InsightFace)
-6. **Stream Proxy:** go2rtc (WebRTC/MSE/HLS)
+1. **Frontend:** React, Vite, and TypeScript, built into `web/dist` and served by the API.
+2. **API:** Python FastAPI. Sessions are JWTs signed with a generated secret and revoked when the password changes.
+3. **Database:** PostgreSQL and pgvector.
+4. **Recording:** ffmpeg segments managed by the API.
+5. **Detection:** Python Ultralytics YOLO.
+6. **Streams:** go2rtc on localhost, reached by the browser through the API.
 
 ## 📸 Screenshots
 

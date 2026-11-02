@@ -47,6 +47,14 @@ class CameraRecorder:
             self._task.cancel()
         self._task = None
 
+    def state(self) -> str:
+        """recording while ffmpeg is running, backoff after a failure, otherwise stopped."""
+        if self._task is None or self._task.done():
+            return "error" if self.last_error else "stopped"
+        if self.last_error:
+            return "backoff"
+        return "recording"
+
     async def _run_loop(self):
         backoff = 5
         loop = asyncio.get_running_loop()
@@ -229,8 +237,6 @@ async def register_go2rtc_stream(name: str, rtsp_url: str, attempts: int = 5, ti
                     logger.warning(f"Failed to register stream {name} in go2rtc: {res.status_code} {res.text} (attempt {attempt})")
         except Exception as e:
             logger.warning(f"Could not connect to go2rtc API at {url} (attempt {attempt}/{attempts}): {e}")
-            if "127.0.0.1" not in url:
-                url = "http://127.0.0.1:1984"
         if attempt < attempts:
             await asyncio.sleep(0.4 if attempts <= 2 else 2.0)
     return False
@@ -315,12 +321,12 @@ class RecorderManager:
         self._recorders.clear()
 
     def status(self) -> dict:
-        return {cid: "recording" for cid in self._recorders}
+        return {cid: rec.state() for cid, rec in self._recorders.items()}
 
     def diagnostics(self) -> dict:
         return {
             cid: {
-                "status": "recording",
+                "status": rec.state(),
                 "camera_name": rec.camera_name,
                 "stream_url": mask_rtsp_url(rec.rtsp_url),
                 "started_at": rec.last_started_at.isoformat() if rec.last_started_at else None,
@@ -406,13 +412,32 @@ def is_finalized_cached(path: str, st: os.stat_result) -> bool:
     return result
 
 
+_LIST_CACHE: dict[str, tuple[float, list]] = {}
+
+
 def list_recordings(camera_id: str | None = None) -> list[dict]:
+    """Return recording files. Repeat calls within two seconds reuse the last scan."""
+    cache_key = camera_id or "*"
+    cached = _LIST_CACHE.get(cache_key)
+    now_mono = datetime.now(timezone.utc).timestamp()
+    if cached and now_mono - cached[0] < 2.0:
+        return cached[1]
+    results = _scan_recordings(camera_id)
+    _LIST_CACHE[cache_key] = (now_mono, results)
+    if len(_LIST_CACHE) > 32:
+        _LIST_CACHE.clear()
+        _LIST_CACHE[cache_key] = (now_mono, results)
+    return results
+
+
+def _scan_recordings(camera_id: str | None = None) -> list[dict]:
     """Return a list of recording files across both hot and cold tiers, optionally filtered by camera."""
     results = []
     hot_base = RECORDINGS_BASE
-    cold_base = Path(os.getenv("COLD_STORAGE_PATH", "/mnt/archive/mview/recordings"))
+    cold_env = os.getenv("COLD_STORAGE_PATH", "").strip()
+    cold_base = Path(cold_env) if cold_env else None
 
-    bases = [b for b in (hot_base, cold_base) if b.exists()]
+    bases = [b for b in (hot_base, cold_base) if b is not None and b.exists()]
     if not bases:
         return results
 
@@ -448,7 +473,7 @@ def list_recordings(camera_id: str | None = None) -> list[dict]:
                     if stat.st_size < 10240:
                         continue
                     # Always skip the newest segment if this camera is actively recording and the file was modified recently
-                    if i == 0 and cam_dir.name in active_recorders and (now_ts - stat.st_mtime) < (SEGMENT_DURATION + 15):
+                    if i == 0 and active_recorders.get(cam_dir.name) == "recording" and (now_ts - stat.st_mtime) < (SEGMENT_DURATION + 15):
                         continue
                     # Skip unfinalized / actively-writing segments (cached per path+size+mtime)
                     if not is_finalized_cached(entry.path, stat):
@@ -535,19 +560,37 @@ def storage_report() -> dict:
     return report
 
 
+def _recording_roots() -> list[Path]:
+    roots = [RECORDINGS_BASE, Path(settings.recordings_dir), Path(settings.storage_path) / "recordings"]
+    cold_env = os.getenv("COLD_STORAGE_PATH", "").strip()
+    if cold_env:
+        roots.append(Path(cold_env))
+    unique: list[Path] = []
+    seen = set()
+    for root in roots:
+        try:
+            key = str(root.resolve()) if root.exists() else str(root)
+        except OSError:
+            key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
 def purge_all_recordings(camera_id: str | None = None) -> dict:
     """Delete recording segment files from the configured recording store."""
+    from api.security import contained_path, safe_camera_id
     purged_count = 0
     purged_bytes = 0
 
-    cid = camera_id.strip() if (camera_id and camera_id.strip()) else None
+    try:
+        cid = safe_camera_id(camera_id) if camera_id and camera_id.strip() else None
+    except ValueError:
+        logger.warning("Rejected recording purge for an unsafe camera id")
+        return {"deleted_files": 0, "deleted_gb": 0.0, "error": "invalid camera id"}
 
-    possible_bases = [
-        RECORDINGS_BASE,
-        Path(settings.recordings_dir).resolve(),
-        Path("./recordings").resolve(),
-        Path(settings.storage_path) / "recordings",
-    ]
+    possible_bases = _recording_roots()
 
     seen_files = set()
     for base in possible_bases:
@@ -563,6 +606,8 @@ def purge_all_recordings(camera_id: str | None = None) -> dict:
                 files = list(base.rglob(pattern))
 
             for f in files:
+                if contained_path(base, f) is None:
+                    continue
                 if f.is_file() and f not in seen_files:
                     seen_files.add(f)
                     try:
@@ -591,23 +636,23 @@ def purge_old_recordings(retention_days: int):
     purged_count = 0
     purged_bytes = 0
     
-    if not RECORDINGS_BASE.exists():
-        return
-        
-    for cam_dir in RECORDINGS_BASE.iterdir():
-        if not cam_dir.is_dir():
+    for root in _recording_roots():
+        if not root.exists():
             continue
-        for f in cam_dir.glob("*.mp4"):
-            try:
-                stat = f.stat()
-                file_time = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-                if file_time < cutoff:
-                    file_size = stat.st_size
-                    f.unlink()
-                    purged_count += 1
-                    purged_bytes += file_size
-            except Exception as e:
-                logger.error(f"Error purging file {f}: {e}")
+        for cam_dir in root.iterdir():
+            if not cam_dir.is_dir():
+                continue
+            for f in cam_dir.glob("*.mp4"):
+                try:
+                    stat = f.stat()
+                    file_time = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    if file_time < cutoff:
+                        file_size = stat.st_size
+                        f.unlink()
+                        purged_count += 1
+                        purged_bytes += file_size
+                except Exception as e:
+                    logger.error(f"Error purging file {f}: {e}")
                 
     if purged_count > 0:
         logger.info(f"Auto-purge complete. Deleted {purged_count} files ({round(purged_bytes / 1_048_576, 1)} MB)")

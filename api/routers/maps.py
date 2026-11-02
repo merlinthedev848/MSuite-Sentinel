@@ -10,8 +10,19 @@ from pathlib import Path
 
 router = APIRouter(prefix="/maps", tags=["maps"])
 
-UPLOAD_DIR = os.getenv("STORAGE_PATH", "/mnt/storage/mview") + "/maps"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+def _maps_dir() -> str:
+    from api.config import settings
+    preferred = Path(settings.storage_path) / "maps"
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        return str(preferred)
+    except OSError:
+        fallback = Path("/tmp/sentinel-maps")
+        fallback.mkdir(parents=True, exist_ok=True)
+        return str(fallback)
+
+
+UPLOAD_DIR = _maps_dir()
 CONFIG_PATH = Path(UPLOAD_DIR) / "default.json"
 
 
@@ -84,9 +95,11 @@ async def save_camera_positions(map_id: str, positions: list = Body(...), db: As
         cam = cameras.get(pos["id"])
         if not cam:
             continue
-        config = cam.config or {}
+        from sqlalchemy.orm.attributes import flag_modified
+        config = dict(cam.config or {})
         config["map"] = {"map_id": map_id, "x": pos["x"], "y": pos["y"], "rotation": pos["rotation"]}
         cam.config = config
+        flag_modified(cam, "config")
 
     config = _read_config()
     config["map_id"] = map_id

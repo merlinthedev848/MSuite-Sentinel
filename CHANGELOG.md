@@ -4,6 +4,24 @@ All notable changes, fixes, security enhancements, and performance optimizations
 
 ---
 
+## Unreleased
+
+### Security
+- Replaced the public JWT placeholder with a generated secret and removed the `admin` / `admin` login.
+- Stopped trusting loopback clients without a token. The detector uses a limited service token.
+- Bound Postgres, MQTT, and go2rtc to localhost, removed the unused Redis service, and stopped mounting the Docker socket.
+- Disabled unsigned `git reset --hard` updates.
+- Stopped returning camera and NVR passwords to users who only have live access.
+- Applied `sentinel.yml` when the environment does not set the same value.
+
+### Behavior
+- Event search is keyword matching. Face recognition and ALPR return nothing until a real engine is configured.
+- The detector rotates across cameras and publishes heartbeats. Signal loss is a missed heartbeat, not a failed snapshot.
+- Cold storage stays disabled unless `COLD_STORAGE_PATH` is set, and retention deletes expired files there too.
+- Recorder status reports backoff instead of always reporting recording.
+
+---
+
 ## [1.2.0] - 2026-08-20
 
 ### 🚀 Added

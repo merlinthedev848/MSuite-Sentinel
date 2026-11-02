@@ -44,8 +44,10 @@ class VLMService:
         elif provider == "openai" and settings.openai_api_key:
             return await self._analyze_openai(image_bytes, classes_str)
         
-        # Local / fallback mock behavior
-        return self._local_fallback(detected_classes)
+        # No cloud model is configured. The local path is a keyword table, not a vision model.
+        result = self._local_fallback(detected_classes)
+        result["engine"] = "keyword-rules"
+        return result
 
     async def _analyze_gemini(self, image_bytes: bytes, classes_str: str) -> dict:
         b64_data = base64.b64encode(image_bytes).decode("utf-8")
@@ -158,8 +160,9 @@ class VLMService:
             threat = "MEDIUM"
         
         return {
-            "description": f"Visual alert: {objects_desc} identified in frame.",
-            "threat_level": threat
+            "description": f"Keyword rule matched {objects_desc}. This is not a vision-language description.",
+            "threat_level": threat,
+            "engine": "keyword-rules",
         }
 
     async def close(self):
