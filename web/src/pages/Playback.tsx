@@ -36,8 +36,10 @@ interface RecordingFile {
   size_mb: number;
   created_at: string;
   url: string;
+  duration_seconds?: number;
   startTimestamp: number;
   endTimestamp: number;
+  segmentMs?: number;
 }
 
 interface CameraEvent {
@@ -183,24 +185,28 @@ const Playback: React.FC = () => {
                 start = Date.UTC(parseInt(y), parseInt(m) - 1, parseInt(d), parseInt(hr), parseInt(min), parseInt(sec));
               }
             }
+            const segmentMs = Math.max(1, Number(r.duration_seconds) || 60) * 1000;
             return {
               ...r,
               startTimestamp: start,
-              endTimestamp: start + 60000
+              endTimestamp: start + segmentMs,
+              segmentMs,
             };
           }).filter((r: any) => r.startTimestamp > 0);
 
           // Sort by startTimestamp ascending
           recs.sort((a, b) => a.startTimestamp - b.startTimestamp);
 
-          // Calculate gapless/accurate endTimestamp to display continuous footage
+          // A gap up to two segments still belongs to the previous file. A longer
+          // gap ends the file at its own segment length.
           for (let i = 0; i < recs.length; i++) {
             const start = recs[i].startTimestamp;
-            let end = start + 60000;
+            const segmentMs = recs[i].segmentMs || 60000;
+            let end = start + segmentMs;
             if (i < recs.length - 1) {
               const nextStart = recs[i + 1].startTimestamp;
               const gap = nextStart - start;
-              if (gap > 0 && gap <= 120000) {
+              if (gap > 0 && gap <= segmentMs * 2) {
                 end = nextStart;
               }
             }
@@ -590,11 +596,7 @@ const Playback: React.FC = () => {
     );
   }, [cameras, searchQuery]);
 
-  const recordingSrc = (url: string) => {
-    const token = localStorage.getItem('mview_token');
-    const separator = url.includes('?') ? '&' : '?';
-    return apiUrl(token ? `${url}${separator}token=${encodeURIComponent(token)}` : url);
-  };
+  const recordingSrc = (url: string) => apiUrl(url);
 
   const withStart = (url: string, offsetSec: number) => {
     const base = recordingSrc(url);

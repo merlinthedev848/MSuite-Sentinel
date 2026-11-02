@@ -7,10 +7,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
+      '^/(auth|cameras|recordings|recordings-list|events|system|users|maps|ops-api|agent|automations|go2rtc|static)': {
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-      }
+      },
     }
   }
 })

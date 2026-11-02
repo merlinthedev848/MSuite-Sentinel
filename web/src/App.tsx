@@ -15,28 +15,24 @@ const Operations = lazy(() => import('./pages/Operations'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Wallboard = lazy(() => import('./pages/Wallboard'));
 
-// Setup global fetch interceptor to inject JWT
+try {
+  localStorage.removeItem('mview_token');
+} catch {
+  /* storage can be blocked; the cookie is the session */
+}
+
 const originalFetch = window.fetch;
 window.fetch = async (...args) => {
-  let [resource, config] = args;
-  const token = localStorage.getItem('mview_token');
-  
-  if (token && typeof resource === 'string' && !resource.includes('/auth/login') && !resource.includes('/go2rtc/')) {
-     config = config || {};
-     config.headers = {
-       ...config.headers,
-       'Authorization': `Bearer ${token}`
-     };
+  const [resource, config] = args;
+  const nextConfig: RequestInit = { ...(config || {}) };
+  if (!nextConfig.credentials) nextConfig.credentials = 'same-origin';
+  const url = typeof resource === 'string' ? resource : '';
+  const res = await originalFetch(resource, nextConfig);
+  const sessionProbe = url.includes('/auth/login') || url.includes('/auth/me') || url.includes('/auth/logout');
+  if (res.status === 401 && url && !sessionProbe) {
+    try { localStorage.removeItem('mview_token'); } catch { /* ignore */ }
+    window.dispatchEvent(new Event('sentinel-unauthorized'));
   }
-  
-  const res = await originalFetch(resource, config);
-  
-  // If API returns 401 Unauthorized (and not the login endpoint), force logout
-  if (res.status === 401 && typeof resource === 'string' && !resource.includes('/auth/login')) {
-    localStorage.removeItem('mview_token');
-    window.dispatchEvent(new Event('storage')); // Trigger re-render
-  }
-  
   return res;
 };
 
@@ -95,9 +91,7 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
       } catch {}
     };
 
-    const token = localStorage.getItem('mview_token');
-    const liveUrl = apiUrl(`/system/live${token ? `?token=${encodeURIComponent(token)}` : ''}`);
-    const eventsSource = new EventSource(liveUrl);
+    const eventsSource = new EventSource(apiUrl('/system/live'));
 
     const handleSnapshot = (event: MessageEvent) => {
       try {
@@ -406,30 +400,43 @@ class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { 
 }
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem('mview_token'));
+  const [session, setSession] = useState<'checking' | 'in' | 'out'>('checking');
   const [showAIDrawer, setShowAIDrawer] = useState(false);
 
   useEffect(() => {
-    const handleStorage = () => {
-      setToken(localStorage.getItem('mview_token'));
+    let cancelled = false;
+    fetch(apiUrl('/auth/me'))
+      .then((res) => {
+        if (!cancelled) setSession(res.ok ? 'in' : 'out');
+      })
+      .catch(() => {
+        if (!cancelled) setSession('out');
+      });
+    const handleUnauthorized = () => setSession('out');
+    window.addEventListener('sentinel-unauthorized', handleUnauthorized);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('sentinel-unauthorized', handleUnauthorized);
     };
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
   }, []);
 
-  const handleLogin = (t: string) => {
-    localStorage.setItem('mview_token', t);
-    setToken(t);
+  const handleLogin = () => {
+    setSession('in');
     window.location.href = '/dashboard';
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('mview_token');
-    setToken(null);
-    window.location.href = '/';
+    fetch(apiUrl('/auth/logout'), { method: 'POST' }).finally(() => {
+      setSession('out');
+      window.location.href = '/';
+    });
   };
 
-  if (!token) {
+  if (session === 'checking') {
+    return <div className="empty">Checking session...</div>;
+  }
+
+  if (session === 'out') {
     return <Login onLogin={handleLogin} />;
   }
 

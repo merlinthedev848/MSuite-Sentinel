@@ -93,12 +93,22 @@ check("updater cannot reset git", "reset --hard" not in system_source and "docke
 with TestClient(app, client=("127.0.0.1", 50000)) as client:
     check("openapi hidden", client.get("/openapi.json").status_code == 404)
     check("loopback cameras require auth", client.get("/cameras").status_code == 401)
+    check("floorplans require auth", client.get("/static/maps/floor.png").status_code == 401)
     check("admin/admin rejected", client.post("/auth/login", data={"username": "admin", "password": "admin"}).status_code == 401)
     password = (SECRETS / "admin_password").read_text().strip()
     login = client.post("/auth/login", data={"username": "admin", "password": password})
     check("generated admin password works", login.status_code == 200, login.text[:180])
     token = login.json()["access_token"]
     admin = {"Authorization": f"Bearer {token}"}
+    me = client.get("/auth/me")
+    check("cookie session identifies the user", me.status_code == 200 and me.json().get("username") == "admin", me.text[:180])
+    cookie_list = client.get("/cameras")
+    check("cookie session lists cameras", cookie_list.status_code == 200, cookie_list.text[:180])
+    query_token = client.get("/cameras", params={"token": token})
+    check("query token rejected", query_token.status_code == 401 and "not accepted" in query_token.text, query_token.text[:180])
+    logged_out = client.post("/auth/logout")
+    check("logout clears the cookie", logged_out.status_code == 200 and client.get("/cameras").status_code == 401)
+    client.cookies.set("sentinel_session", token)
     forged = jwt.encode(
         {"sub": "admin", "role": "admin", "permissions": ["settings"], "ver": 0},
         "CHANGE-ME-IN-PRODUCTION-USE-RANDOM-SECRET",
@@ -160,6 +170,50 @@ with TestClient(app, client=("127.0.0.1", 50000)) as client:
     os.environ["COLD_STORAGE_PATH"] = str(cold)
     purge_old_recordings(14)
     check("retention deletes expired cold files", not old.exists())
+
+import asyncio
+import sqlite3
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from api.migrations import apply_migrations
+
+async def _check_legacy_migration() -> tuple[list[str], list[str]]:
+    legacy = create_async_engine(f"sqlite+aiosqlite:///{BASE / 'legacy.db'}")
+    async with legacy.begin() as conn:
+        await conn.execute(text("CREATE TABLE users (id VARCHAR PRIMARY KEY, username VARCHAR)"))
+        await conn.execute(text(
+            'CREATE TABLE semantic_events (id VARCHAR PRIMARY KEY, camera_id VARCHAR, "timestamp" DATETIME)'
+        ))
+        first = await apply_migrations(conn)
+        second = await apply_migrations(conn)
+    await legacy.dispose()
+    return first, second
+
+legacy_first, legacy_second = asyncio.run(_check_legacy_migration())
+check(
+    "legacy schema records migrations",
+    legacy_first == ["0001_users_token_version", "0002_semantic_events_camera_ts"] and legacy_second == [],
+    str(legacy_first),
+)
+legacy_columns = {row[1] for row in sqlite3.connect(BASE / "legacy.db").execute("PRAGMA table_info(users)")}
+check("legacy users table gains token_version", "token_version" in legacy_columns, str(sorted(legacy_columns)))
+
+migration_rows = {row[0] for row in sqlite3.connect(BASE / "sentinel.db").execute("SELECT id FROM schema_migrations")}
+check(
+    "schema migrations recorded",
+    {"0001_users_token_version", "0002_semantic_events_camera_ts"} <= migration_rows,
+    str(sorted(migration_rows)),
+)
+main_source = (ROOT / "api" / "main.py").read_text()
+check("recording server has no default archive path", "/mnt/archive" not in main_source)
+web_hits = []
+for source_file in (ROOT / "web" / "src").rglob("*"):
+    if source_file.suffix not in {".ts", ".tsx"}:
+        continue
+    text = source_file.read_text()
+    if "localStorage.getItem('mview_token'" in text or "localStorage.setItem('mview_token'" in text or "?token=" in text:
+        web_hits.append(str(source_file.relative_to(ROOT)))
+check("dashboard does not keep the session token", not web_hits, ", ".join(web_hits))
 
 if failures:
     print(f"\n{len(failures)} check(s) failed")

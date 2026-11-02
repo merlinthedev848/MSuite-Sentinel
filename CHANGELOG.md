@@ -7,6 +7,10 @@ All notable changes, fixes, security enhancements, and performance optimizations
 ## Unreleased
 
 ### Security
+- The dashboard session is an HTTP-only cookie. Media and event-stream URLs no longer carry the token, and the page does not keep it in `localStorage`. Bearer tokens remain for the mobile app and scripts.
+- Schema changes are recorded in `schema_migrations` and applied in order on startup, including databases created before `token_version` existed.
+- Floorplans require a signed-in user. Camera adoption sends the password in the request body.
+- Playback uses the recorder segment length, and the events list honors the playback page's request up to 5,000 rows.
 - Replaced the public JWT placeholder with a generated secret and removed the `admin` / `admin` login.
 - Stopped trusting loopback clients without a token. The detector uses a limited service token.
 - Bound Postgres, MQTT, and go2rtc to localhost, removed the unused Redis service, and stopped mounting the Docker socket.

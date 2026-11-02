@@ -213,27 +213,6 @@ const defaultSystemConfig: SystemConfig = {
   },
 };
 
-const getCurrentUser = (): TokenUser => {
-  const token = localStorage.getItem('mview_token');
-  if (!token) return {};
-  try {
-    const payload = token.split('.')[1];
-    let base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
-    while (base64.length % 4) {
-      base64 += '=';
-    }
-    const decoded = JSON.parse(atob(base64));
-    return {
-      id: decoded.user_id,
-      username: decoded.sub,
-      role: decoded.role,
-      permissions: decoded.permissions,
-    };
-  } catch {
-    return {};
-  }
-};
-
 type Tab = 'cameras' | 'ai' | 'network' | 'system' | 'users';
 const permissionOptions = ['live', 'playback', 'events', 'operations', 'settings'];
 const Settings: React.FC = () => {
@@ -387,7 +366,7 @@ const Settings: React.FC = () => {
       const res = await fetch(apiUrl('/system/factory-reset'), { method: 'POST' });
       if (res.ok) {
         showToast('Factory reset complete. Logging out...');
-        localStorage.removeItem('mview_token');
+        await fetch(apiUrl('/auth/logout'), { method: 'POST' });
         setTimeout(() => {
           window.location.href = '/';
         }, 3000);
@@ -402,14 +381,27 @@ const Settings: React.FC = () => {
     }
   };
 
-  const currentUser = getCurrentUser();
+  const [currentUser, setCurrentUser] = useState<TokenUser>({});
   const isAdmin = currentUser.role === 'admin';
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(apiUrl('/auth/me'))
+      .then((res) => (res.ok ? res.json() : null))
+      .then((user) => {
+        if (!cancelled && user) setCurrentUser(user);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (tab === 'ai' || tab === 'network' || tab === 'system') loadSystemConfig();
     if (tab === 'system') loadSystemHealth();
     if (tab === 'users' && isAdmin) fetchUsers();
-  }, [tab]);
+  }, [tab, isAdmin]);
 
   const loadSystemConfig = async () => {
     try {
@@ -467,30 +459,16 @@ const Settings: React.FC = () => {
     } catch {}
   };
 
-  const getAuthHeaders = (): Record<string, string> => {
-    const token = localStorage.getItem('mview_token');
-    return token ? { 'Authorization': `Bearer ${token}` } : {};
-  };
-
   const purgeRecordings = async () => {
     const selectedCamera = purgeCameraId ? cameras.find(cam => cam.id === purgeCameraId) : null;
     const usage = selectedCamera ? `recordings for ${selectedCamera.name}` : (storageReport?.total_gb ? `${storageReport.total_gb} GB` : 'all stored video');
     if (!window.confirm(`Delete ${usage} of recordings? This cannot be undone.`)) return;
     setPurgingRecordings(true);
     try {
-      const token = localStorage.getItem('mview_token') || '';
-      const query = purgeCameraId 
-        ? `?camera_id=${encodeURIComponent(purgeCameraId)}&token=${encodeURIComponent(token)}`
-        : `?token=${encodeURIComponent(token)}`;
-      let res = await fetch(apiUrl(`/system/recordings/purge${query}`), { 
-        method: 'POST',
-        headers: { ...getAuthHeaders() }
-      });
+      const query = purgeCameraId ? `?camera_id=${encodeURIComponent(purgeCameraId)}` : '';
+      let res = await fetch(apiUrl(`/system/recordings/purge${query}`), { method: 'POST' });
       if (!res.ok) {
-        res = await fetch(apiUrl(`/system/purge-recordings${query}`), { 
-          method: 'POST',
-          headers: { ...getAuthHeaders() }
-        });
+        res = await fetch(apiUrl(`/system/purge-recordings${query}`), { method: 'POST' });
       }
       if (res.ok) {
         const data = await res.json();
@@ -513,10 +491,7 @@ const Settings: React.FC = () => {
   const runDiagnostics = async () => {
     setRunningDiag(true);
     try {
-      const token = localStorage.getItem('mview_token') || '';
-      const res = await fetch(apiUrl(`/system/diagnostics?token=${encodeURIComponent(token)}`), {
-        headers: { ...getAuthHeaders() }
-      });
+      const res = await fetch(apiUrl('/system/diagnostics'));
       if (res.ok) {
         const data = await res.json();
         showToast(`Diagnostics: ${data.status.toUpperCase()} | DB: ${data.database_connected ? 'OK' : 'ERR'} | go2rtc: ${data.go2rtc_active ? 'OK' : 'ERR'} | Free Disk: ${data.storage.free_gb} GB`);
@@ -532,11 +507,7 @@ const Settings: React.FC = () => {
   const runVacuum = async () => {
     setRunningVac(true);
     try {
-      const token = localStorage.getItem('mview_token') || '';
-      const res = await fetch(apiUrl(`/system/maintenance/vacuum?token=${encodeURIComponent(token)}`), { 
-        method: 'POST',
-        headers: { ...getAuthHeaders() }
-      });
+      const res = await fetch(apiUrl('/system/maintenance/vacuum'), { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         showToast(data.message || 'Database query indexes optimized.');
@@ -750,10 +721,10 @@ const Settings: React.FC = () => {
   const adoptCamera = async (cam: any, u: string, p: string) => {
     setAdopting(cam.id || cam.onvif_endpoint);
     try {
-      const res = await fetch(apiUrl(`/cameras/adopt?username=${encodeURIComponent(u)}&password=${encodeURIComponent(p)}`), {
+      const res = await fetch(apiUrl('/cameras/adopt'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cam),
+        body: JSON.stringify({ ...cam, username: u, password: p }),
       });
       if (res.ok) {
         setDiscovered(prev => prev.filter(c => c.onvif_endpoint !== cam.onvif_endpoint));

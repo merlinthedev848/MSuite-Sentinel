@@ -73,6 +73,11 @@ export default function App() {
     try {
       const nextHealth = await fetchHealth(formattedUrl);
       const token = await loginToServer(formattedUrl, username, password);
+      if (!token) {
+        setIsConnecting(false);
+        setError('Invalid username or password');
+        return;
+      }
       setAuthToken(token);
       setHealth(nextHealth);
       setBaseUrl(formattedUrl);
