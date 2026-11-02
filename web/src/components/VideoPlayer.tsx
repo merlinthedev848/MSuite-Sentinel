@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Maximize, Minimize, Mic, Video as VideoIcon, Activity, Focus, Volume2, VolumeX } from 'lucide-react';
-import { go2rtcUrl, apiUrl } from '../lib/endpoints';
+import { Camera, Maximize, Minimize, Video as VideoIcon, Activity, Focus, Volume2, VolumeX } from 'lucide-react';
+import { apiUrl } from '../lib/endpoints';
+import LivePlayer, { LiveMode } from './LivePlayer';
 
 interface VideoPlayerProps {
   cameraId: string;
@@ -13,17 +14,14 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
   const [isHovered, setIsHovered] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [useMjpegFallback, setUseMjpegFallback] = useState(false);
+  const [liveMode, setLiveMode] = useState<LiveMode>('connecting');
 
   // States for tools
   const [isMuted, setIsMuted] = useState(true);
-  const [isMicActive, setIsMicActive] = useState(false);
   const [isZoomMode, setIsZoomMode] = useState(false);
   const [zoomScale, setZoomScale] = useState(1);
   const [zoomOffset, setZoomOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
-  const [retryNonce, setRetryNonce] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
@@ -33,143 +31,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
   }, []);
 
   const panStart = useRef({ x: 0, y: 0 });
-  const micStreamRef = useRef<MediaStream | null>(null);
-
-  const isOffline = status === 'offline';
-
-  // WebRTC Connection Setup
-  useEffect(() => {
-    if (isOffline) return;
-
-    let pc: RTCPeerConnection | null = null;
-    let rtcTimeout: number | undefined;
-    let disconnectTimer: number | undefined;
-    setIsStreaming(false);
-    setUseMjpegFallback(false);
-
-    const fallbackToHls = () => {
-      setUseMjpegFallback(true);
-      setIsStreaming(true);
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(track => track.stop());
-        micStreamRef.current = null;
-        if (setIsMicActive) setIsMicActive(false);
-      }
-    };
-
-    pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    });
-
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.addTransceiver('audio', { direction: 'recvonly' });
-
-    // Stream mic tracks if two-way mic is enabled
-    if (isMicActive && micStreamRef.current) {
-      micStreamRef.current.getTracks().forEach(track => {
-        pc?.addTrack(track, micStreamRef.current!);
-      });
-    }
-
-    pc.oniceconnectionstatechange = () => {
-      if (pc) {
-        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-          window.clearTimeout(rtcTimeout);
-          window.clearTimeout(disconnectTimer);
-          videoRef.current?.play().catch(e => console.log("Play on connection success error:", e));
-        }
-        if (pc.iceConnectionState === 'disconnected') {
-          window.clearTimeout(disconnectTimer);
-          disconnectTimer = window.setTimeout(() => {
-            if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
-              console.warn("WebRTC stayed disconnected; renegotiating...");
-              setRetryNonce(n => n + 1);
-            }
-          }, 4000);
-        }
-        if (pc.iceConnectionState === 'failed') {
-          console.warn("WebRTC connection failed. Falling back to MJPEG...");
-          fallbackToHls();
-        }
-      }
-    };
-
-    pc.ontrack = (event) => {
-      window.clearTimeout(rtcTimeout);
-      if (videoRef.current && videoRef.current.srcObject !== event.streams[0]) {
-        videoRef.current.srcObject = event.streams[0];
-        videoRef.current.play().catch(e => console.log("WebRTC play error:", e));
-        setIsStreaming(true);
-      }
-    };
-
-    const startStream = async () => {
-      try {
-        if (!pc) return;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        const streamName = encodeURIComponent(cameraId);
-        const response = await fetch(go2rtcUrl(`/api/webrtc?src=${streamName}`), {
-          method: 'POST',
-          body: offer.sdp
-        });
-
-        if (response.ok) {
-          const answerSdp = await response.text();
-          if (pc) {
-            await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-          }
-        } else {
-          console.warn("WebRTC offer rejected, falling back to live stream");
-          fallbackToHls();
-        }
-      } catch (err) {
-        console.error("WebRTC Error for camera", cameraId, err);
-        fallbackToHls();
-      }
-    };
-
-    // Set an 8.0s connection timeout for WebRTC before failing over
-    rtcTimeout = window.setTimeout(() => {
-      if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
-        console.warn(`WebRTC connection timed out after 8.0s for camera ${cameraId}. Falling back to stream...`);
-        fallbackToHls();
-      }
-    }, 8000);
-
-    startStream();
-
-    return () => {
-      setIsStreaming(false);
-      window.clearTimeout(rtcTimeout);
-      window.clearTimeout(disconnectTimer);
-      if (pc) {
-        pc.close();
-      }
-      if (videoRef.current) {
-        if (videoRef.current.srcObject) {
-          try {
-            const stream = videoRef.current.srcObject;
-            if (stream instanceof MediaStream) {
-              stream.getTracks().forEach(track => track.stop());
-            }
-          } catch (e) {}
-          videoRef.current.srcObject = null;
-        }
-        videoRef.current.src = '';
-      }
-    };
-  }, [cameraId, isOffline, isMicActive, retryNonce]);
-
-  // Cleanup mic stream on unmount
-  useEffect(() => {
-    return () => {
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []);
 
   // 1. Fullscreen
   const handleFullscreen = () => {
@@ -190,47 +51,38 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
     }
   };
 
-  // 2. Snapshot capture
-  const handleSnapshot = () => {
+  const handleSnapshot = async () => {
     const video = videoRef.current;
-    if (!video) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 1920;
-    canvas.height = video.videoHeight || 1080;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const url = canvas.toDataURL('image/jpeg');
+    const stamp = `snapshot_${name.replace(/\s+/g, '_')}_${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
+    if (video && video.videoWidth > 0) {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL('image/jpeg');
+        a.download = stamp;
+        a.click();
+        return;
+      }
+    }
+    try {
+      const res = await fetch(apiUrl(`/cameras/${cameraId}/snapshot?t=${Date.now()}`));
+      if (!res.ok) return;
+      const blob = await res.blob();
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `snapshot_${name.replace(/\s+/g, '_')}_${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
+      a.href = URL.createObjectURL(blob);
+      a.download = stamp;
       a.click();
+      URL.revokeObjectURL(a.href);
+    } catch {
+      /* snapshot endpoint unavailable */
     }
   };
 
-  // 3. Two-Way Audio Talk Toggle
-  const toggleMic = async () => {
-    if (isMicActive) {
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(track => track.stop());
-        micStreamRef.current = null;
-      }
-      setIsMicActive(false);
-      setRetryNonce(n => n + 1);
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        micStreamRef.current = stream;
-        setIsMicActive(true);
-        setRetryNonce(n => n + 1);
-      } catch (err) {
-        console.error("Failed to access mic:", err);
-        alert("Microphone access denied or not supported.");
-      }
-    }
-  };
-
-  // 4. Zoom / Pan Event Handlers
+  // Zoom / Pan Event Handlers
   const handleZoomWheel = (e: React.WheelEvent) => {
     if (!isZoomMode) return;
     e.preventDefault();
@@ -288,81 +140,27 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
       onMouseMove={handleZoomMouseMove}
       onMouseUp={handleZoomMouseUp}
     >
-      {/* Video Element */}
-      {status !== 'offline' ? (
-        useMjpegFallback ? (
-          <img 
-            src={go2rtcUrl(`/api/stream.mjpeg?src=${cameraId}`)}
-            alt="Camera Feed"
-            onError={(e) => {
-              const target = e.currentTarget as HTMLImageElement;
-              target.dataset.fallback = "true";
-              setTimeout(() => {
-                target.src = apiUrl(`/cameras/${cameraId}/snapshot?t=${Date.now()}`);
-              }, 1000);
-            }}
-            onLoad={(e) => {
-              const target = e.currentTarget as HTMLImageElement;
-              if (target.dataset.fallback === "true") {
-                setTimeout(() => {
-                  target.src = apiUrl(`/cameras/${cameraId}/snapshot?t=${Date.now()}`);
-                }, 1000);
-              }
-            }}
-            style={{ 
-              width: '100%', 
-              height: '100%', 
-              objectFit: 'cover',
-              transform: isZoomMode ? `scale(${zoomScale}) translate(${zoomOffset.x}px, ${zoomOffset.y}px)` : 'none',
-              transformOrigin: 'center center',
-              transition: isPanning ? 'none' : 'transform 0.1s ease',
-              cursor: isZoomMode ? (isPanning ? 'grabbing' : 'grab') : 'default'
-            }} 
-          />
-        ) : (
-          <>
-            {!isStreaming && (
-              <img 
-                src={apiUrl(`/cameras/${cameraId}/snapshot`)}
-                alt={name}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                  zIndex: 1,
-                  pointerEvents: 'none'
-                }}
-              />
-            )}
-            <video 
-              ref={videoRef}
-              autoPlay 
-              playsInline 
-              muted={isMuted} 
-              style={{ 
-                width: '100%', 
-                height: '100%', 
-                objectFit: 'cover',
-                opacity: isStreaming ? 1 : 0,
-                transform: isZoomMode ? `scale(${zoomScale}) translate(${zoomOffset.x}px, ${zoomOffset.y}px)` : 'none',
-                transformOrigin: 'center center',
-                transition: isPanning ? 'none' : 'transform 0.1s ease, opacity 0.3s ease',
-                cursor: isZoomMode ? (isPanning ? 'grabbing' : 'grab') : 'default'
-              }} 
-            />
-          </>
-        )
-      ) : (
+      <LivePlayer
+        cameraId={cameraId}
+        quality="auto"
+        muted={isMuted}
+        videoRef={videoRef}
+        onMode={setLiveMode}
+        style={{
+          transform: isZoomMode ? `scale(${zoomScale}) translate(${zoomOffset.x}px, ${zoomOffset.y}px)` : 'none',
+          transformOrigin: 'center center',
+          transition: isPanning ? 'none' : 'transform 0.1s ease',
+          cursor: isZoomMode ? (isPanning ? 'grabbing' : 'grab') : 'default',
+        }}
+      />
+      {liveMode === 'unavailable' && (
         <div style={{
           position: 'absolute',
-          top: 0, left: 0, right: 0, bottom: 0,
-          background: 'linear-gradient(45deg, #050508 0%, #1a1a24 100%)',
+          inset: 0,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center'
+          justifyContent: 'center',
+          pointerEvents: 'none',
         }}>
           <VideoIcon size={48} color="rgba(255,255,255,0.05)" />
         </div>
@@ -490,15 +288,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
           <Focus size={18} />
         </button>
 
-        {/* Two-Way Microphone Talk */}
-        <button 
-          onClick={toggleMic} 
-          style={{ background: 'transparent', border: 'none', color: isMicActive ? 'var(--color-danger)' : '#fff', cursor: 'pointer', padding: '4px' }} 
-          title={isMicActive ? "Mute Microphone" : "Two-Way Audio Talk"}
-        >
-          <Mic size={18} style={{ animation: isMicActive ? 'pulse-ring 2s infinite' : 'none' }} />
-        </button>
-
         {/* Snapshot Capture */}
         <button 
           onClick={handleSnapshot} 
@@ -518,10 +307,9 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
         </button>
       </div>
       
-      {/* WebRTC performance overlay */}
-      {isHovered && isStreaming && (
+      {isHovered && (liveMode === 'mse' || liveMode === 'mjpeg') && (
         <div style={{ position: 'absolute', top: '40px', left: '12px', zIndex: 10, color: 'rgba(255,255,255,0.5)', fontSize: '0.7rem', fontFamily: 'var(--font-mono)' }}>
-          {isMicActive ? 'WebRTC | Bidirectional Audio' : 'WebRTC | Live Stream'}
+          {liveMode === 'mse' ? 'Live' : 'Live MJPEG'}
         </div>
       )}
     </div>

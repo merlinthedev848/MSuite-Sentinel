@@ -319,7 +319,11 @@ async def proxy_go2rtc(request: Request, path: str = ""):
             headers=headers,
             content=body,
         )
-        resp = await client.send(req, stream=True)
+        resp = await client.send(
+            req,
+            stream=True,
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
+        )
         return StreamingResponse(
             resp.aiter_bytes(),
             status_code=resp.status_code,
@@ -330,6 +334,92 @@ async def proxy_go2rtc(request: Request, path: str = ""):
         )
     except Exception as e:
         raise HTTPException(502, f"go2rtc proxy error: {e}")
+
+
+def _playback_offset(request: Request) -> float:
+    raw = request.query_params.get("t")
+    if not raw:
+        return 0.0
+    try:
+        return min(3600.0, max(0.0, float(raw)))
+    except ValueError:
+        return 0.0
+
+
+_TRANSCODE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _transcode_lock(path: str) -> asyncio.Lock:
+    lock = _TRANSCODE_LOCKS.get(path)
+    if lock is None:
+        lock = asyncio.Lock()
+        _TRANSCODE_LOCKS[path] = lock
+    return lock
+
+
+async def _build_browser_cache(src: Path, dest: Path) -> None:
+    """Write a seekable H.264 copy in the background. Playback does not wait for it."""
+    from api.services.recorder import _terminate_process, is_finalized_mp4
+
+    lock = _transcode_lock(str(dest))
+    if lock.locked():
+        return
+    async with lock:
+        if dest.exists() and dest.stat().st_size >= 10240 and is_finalized_mp4(dest):
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{dest.name}.part")
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(src),
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-pix_fmt", "yuv420p", "-profile:v", "baseline",
+            "-c:a", "aac", "-b:a", "96k",
+            "-movflags", "+faststart",
+            str(tmp),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await proc.wait()
+            if proc.returncode == 0 and tmp.exists() and tmp.stat().st_size >= 10240:
+                tmp.replace(dest)
+        finally:
+            await _terminate_process(proc)
+            if tmp.exists() and not dest.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+
+
+async def _iter_transcoded(src: Path, start: float):
+    """Stream an H.264 fMP4 that begins at `start` seconds. First bytes are not delayed for a full-file encode."""
+    from api.services.recorder import _terminate_process
+
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-ss", f"{max(0.0, start):.3f}",
+        "-i", str(src),
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+        "-crf", "28", "-pix_fmt", "yuv420p", "-profile:v", "baseline",
+        "-c:a", "aac", "-b:a", "96k",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof+separate_moof",
+        "-f", "mp4", "pipe:1",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        assert proc.stdout is not None
+        while True:
+            chunk = await proc.stdout.read(64 * 1024)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        await _terminate_process(proc)
 
 
 # ── Serve recorded video files ─────────────────────────────────────
@@ -361,45 +451,26 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
         raise HTTPException(404, "Recording not found")
 
     file_size = fp.stat().st_size
-    from api.services.recorder import is_finalized_cached, needs_browser_transcode, _terminate_process
+    from api.services.recorder import is_finalized_cached, is_finalized_mp4, needs_browser_transcode
     if file_size < 10240 or not is_finalized_cached(str(fp), fp.stat()):
         raise HTTPException(409, "Recording segment is unfinalized or in-progress")
 
-    # If this segment was recorded with H.265/HEVC (hvc1/hev1) via -c:v copy,
-    # transcode it once to browser-compatible H.264 (avc1) + faststart so Chrome/Edge/Firefox can play it.
+    # H.265 segments are not playable in Chrome. Serve a finished H.264 cache when
+    # one exists. Otherwise start that cache in the background and stream from the
+    # requested offset immediately, so the request is not held for a full transcode.
     if needs_browser_transcode(fp, file_size):
         cache_dir = Path(settings.storage_path) / "transcoded_cache" / camera_id
-        cache_dir.mkdir(parents=True, exist_ok=True)
         cached_fp = cache_dir / filename
-        if not cached_fp.exists() or cached_fp.stat().st_size < 10240:
-            tmp_fp = cache_dir / f".tmp_{os.getpid()}_{filename}"
-            proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-i", str(fp),
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                "-pix_fmt", "yuv420p", "-profile:v", "main",
-                "-c:a", "aac", "-b:a", "128k",
-                "-movflags", "+faststart",
-                str(tmp_fp),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=45.0)
-                if proc.returncode == 0 and tmp_fp.exists() and tmp_fp.stat().st_size >= 10240:
-                    tmp_fp.replace(cached_fp)
-            except Exception:
-                pass
-            finally:
-                await _terminate_process(proc)
-                if tmp_fp.exists():
-                    try:
-                        tmp_fp.unlink()
-                    except OSError:
-                        pass
-        if cached_fp.exists() and cached_fp.stat().st_size >= 10240:
+        if cached_fp.exists() and cached_fp.stat().st_size >= 10240 and is_finalized_mp4(cached_fp):
             fp = cached_fp
             file_size = fp.stat().st_size
+        else:
+            asyncio.create_task(_build_browser_cache(fp, cached_fp))
+            return StreamingResponse(
+                _iter_transcoded(fp, _playback_offset(request)),
+                media_type="video/mp4",
+                headers={"Cache-Control": "no-store", "Accept-Ranges": "none"},
+            )
 
     range_header = request.headers.get("range")
     if range_header:

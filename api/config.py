@@ -131,7 +131,7 @@ class Settings(BaseSettings):
         ),
     )
     record_video_codec: str = Field(
-        default="libx264",
+        default="copy",
         validation_alias=AliasChoices("SENTINEL_RECORD_VIDEO_CODEC", "RECORD_VIDEO_CODEC"),
     )
     record_video_crf: str = Field(

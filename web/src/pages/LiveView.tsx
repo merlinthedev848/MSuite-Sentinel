@@ -5,7 +5,6 @@ import {
   ExternalLink,
   Focus,
   Maximize2,
-  Mic,
   Video,
   WifiOff,
   Volume2,
@@ -13,8 +12,10 @@ import {
   Crosshair,
 } from 'lucide-react';
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { apiUrl, go2rtcUrl } from '../lib/endpoints';
+import { apiUrl } from '../lib/endpoints';
+import { resolvePlaybackTarget } from '../lib/playbackSeek';
 import PTZControls from '../components/PTZControls';
+import LivePlayer, { LiveMode } from '../components/LivePlayer';
 
 interface Camera {
   id: string;
@@ -84,161 +85,26 @@ const inputTime = (date: Date) => {
 
 const CameraFeedComponent = React.memo<{
   cam: Camera;
-  iceServers: RTCIceServer[];
   analytics?: boolean;
   maximized?: boolean;
   paused?: boolean;
   onMaximize?: () => void;
-}>(({ cam, iceServers, analytics = false, maximized = false, paused = false, onMaximize }) => {
+}>(({ cam, analytics = false, maximized = false, paused = false, onMaximize }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [useMjpegFallback, setUseMjpegFallback] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [connected, setConnected] = useState(false);
-  const [retryNonce, setRetryNonce] = useState(0);
+  const [liveMode, setLiveMode] = useState<LiveMode>('connecting');
   const [showPTZ, setShowPTZ] = useState(false);
-  const streamName = (cam.rtsp_url_sub && !maximized) ? `${cam.id}_sub` : `${cam.id}_main`;
+  const hasStream = Boolean(cam.rtsp_url_main || cam.rtsp_url_sub);
+  const quality: 'main' | 'sub' = cam.rtsp_url_sub && !maximized ? 'sub' : 'main';
 
   // Tools states
   const [isMuted, setIsMuted] = useState(true);
-  const [isMicActive, setIsMicActive] = useState(false);
   const [isZoomMode, setIsZoomMode] = useState(false);
   const [zoomScale, setZoomScale] = useState(1);
   const [zoomOffset, setZoomOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
 
   const panStart = useRef({ x: 0, y: 0 });
-  const micStreamRef = useRef<MediaStream | null>(null);
-
-  const iceServersKey = useMemo(() => JSON.stringify(iceServers), [iceServers]);
-
-  const camOffline = cam.status === 'offline';
-
-  useEffect(() => {
-    if (camOffline || !cam.rtsp_url_main) return;
-
-    let pc: RTCPeerConnection | null = null;
-    let rtcTimeout: number | undefined;
-    let disconnectTimer: number | undefined;
-    setConnected(false);
-    setUseMjpegFallback(false);
-
-    const fallbackToHls = () => {
-      setUseMjpegFallback(true);
-      setConnected(true);
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(track => track.stop());
-        micStreamRef.current = null;
-        setIsMicActive(false);
-      }
-    };
-
-    pc = new RTCPeerConnection({ iceServers });
-
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.addTransceiver('audio', { direction: 'recvonly' });
-
-    if (isMicActive && micStreamRef.current) {
-      micStreamRef.current.getTracks().forEach(track => {
-        pc?.addTrack(track, micStreamRef.current!);
-      });
-    }
-
-    pc.oniceconnectionstatechange = () => {
-      if (pc) {
-        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-          window.clearTimeout(rtcTimeout);
-          window.clearTimeout(disconnectTimer);
-          setConnected(true);
-          videoRef.current?.play().catch(err => console.log("LiveView play on connection success error:", err));
-        }
-        if (pc.iceConnectionState === 'disconnected') {
-          // 'disconnected' is frequently transient on WebRTC and recovers by itself.
-          // Give it a grace period, then renegotiate WebRTC instead of dropping to MJPEG.
-          window.clearTimeout(disconnectTimer);
-          disconnectTimer = window.setTimeout(() => {
-            if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
-              console.warn('[LiveView WebRTC] stayed disconnected; renegotiating...');
-              setRetryNonce(n => n + 1);
-            }
-          }, 4000);
-        }
-        if (pc.iceConnectionState === 'failed') {
-          console.warn('[LiveView WebRTC] connection failed. Falling back to MJPEG...');
-          fallbackToHls();
-        }
-      }
-    };
-
-    pc.ontrack = e => {
-      window.clearTimeout(rtcTimeout);
-      if (videoRef.current && videoRef.current.srcObject !== e.streams[0]) {
-        videoRef.current.srcObject = e.streams[0];
-        videoRef.current.play().catch(err => console.log("LiveView WebRTC play error:", err));
-        setConnected(true);
-      }
-    };
-
-    (async () => {
-      try {
-        if (!pc) return;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        const res = await fetch(go2rtcUrl(`/api/webrtc?src=${encodeURIComponent(streamName)}`), {
-          method: 'POST',
-          body: offer.sdp,
-        });
-        if (!res.ok) throw new Error(`go2rtc WebRTC returned ${res.status}`);
-        if (pc) {
-          await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
-        }
-      } catch (e) {
-        console.error('[LiveView WebRTC]', cam.name, e);
-        fallbackToHls();
-      }
-    })();
-
-    // Set an 8.0s connection timeout for WebRTC before failing over to HLS
-    rtcTimeout = window.setTimeout(() => {
-      if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
-        console.warn(`[LiveView WebRTC] connection timed out after 8.0s for ${cam.name}. Falling back to HLS...`);
-        fallbackToHls();
-      }
-    }, 8000);
-
-    return () => {
-      window.clearTimeout(rtcTimeout);
-      window.clearTimeout(disconnectTimer);
-      if (pc) pc.close();
-      if (videoRef.current) {
-        if (videoRef.current.srcObject) {
-          try {
-            const stream = videoRef.current.srcObject;
-            if (stream instanceof MediaStream) {
-              stream.getTracks().forEach(track => track.stop());
-            }
-          } catch (e) {}
-          videoRef.current.srcObject = null;
-        }
-        videoRef.current.src = '';
-      }
-      setConnected(false);
-    };
-  }, [cam.id, camOffline, cam.rtsp_url_main, streamName, isMicActive, retryNonce, iceServersKey]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (paused) video.pause();
-    else video.play().catch(() => {});
-  }, [paused]);
-
-  useEffect(() => {
-    return () => {
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []);
 
   // 1. Fullscreen
   const handleFullscreen = () => {
@@ -251,47 +117,38 @@ const CameraFeedComponent = React.memo<{
     }
   };
 
-  // 2. Snapshot capture
-  const handleSnapshot = () => {
+  const handleSnapshot = async () => {
     const video = videoRef.current;
-    if (!video) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 1920;
-    canvas.height = video.videoHeight || 1080;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const url = canvas.toDataURL('image/jpeg');
+    const stamp = `snapshot_${cam.name.replace(/\s+/g, '_')}_${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
+    if (video && video.videoWidth > 0) {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL('image/jpeg');
+        a.download = stamp;
+        a.click();
+        return;
+      }
+    }
+    try {
+      const res = await fetch(apiUrl(`/cameras/${cam.id}/snapshot?t=${Date.now()}`));
+      if (!res.ok) return;
+      const blob = await res.blob();
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `snapshot_${cam.name.replace(/\s+/g, '_')}_${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
+      a.href = URL.createObjectURL(blob);
+      a.download = stamp;
       a.click();
+      URL.revokeObjectURL(a.href);
+    } catch {
+      /* snapshot endpoint unavailable */
     }
   };
 
-  // 3. Two-Way Mic Talk
-  const toggleMic = async () => {
-    if (isMicActive) {
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(track => track.stop());
-        micStreamRef.current = null;
-      }
-      setIsMicActive(false);
-      setRetryNonce(n => n + 1);
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        micStreamRef.current = stream;
-        setIsMicActive(true);
-        setRetryNonce(n => n + 1);
-      } catch (err) {
-        console.error("Failed to access mic:", err);
-        alert("Microphone access denied or not supported.");
-      }
-    }
-  };
-
-  // 4. Digital PTZ handlers
+  // Digital PTZ handlers
   const handleZoomWheel = (e: React.WheelEvent) => {
     if (!isZoomMode) return;
     e.preventDefault();
@@ -323,7 +180,12 @@ const CameraFeedComponent = React.memo<{
     setIsPanning(false);
   };
 
-  const isOffline = cam.status === 'offline';
+  const zoomStyle: React.CSSProperties = {
+    transform: isZoomMode ? `scale(${zoomScale}) translate(${zoomOffset.x}px, ${zoomOffset.y}px)` : 'none',
+    transformOrigin: 'center center',
+    transition: isPanning ? 'none' : 'transform 0.1s ease',
+    cursor: isZoomMode ? (isPanning ? 'grabbing' : 'grab') : 'default',
+  };
 
   return (
     <div 
@@ -365,85 +227,29 @@ const CameraFeedComponent = React.memo<{
         </div>
       </div>
 
-      {isOffline || !cam.rtsp_url_main ? (
-        <div className="cam-placeholder">
-          <WifiOff size={26} strokeWidth={1.5} />
-          <span>{isOffline ? 'Camera Offline' : 'No Stream URL'}</span>
-        </div>
-      ) : (
+      {hasStream ? (
         <>
-          {useMjpegFallback ? (
-            <img 
-              src={go2rtcUrl(`/api/stream.mjpeg?src=${encodeURIComponent(streamName)}`)}
-              alt="MJPEG Fallback"
-              onError={(e) => {
-                const target = e.currentTarget as HTMLImageElement;
-                target.dataset.fallback = "true";
-                setTimeout(() => {
-                  target.src = apiUrl(`/cameras/${cam.id}/snapshot?t=${Date.now()}`);
-                }, 1000);
-              }}
-              onLoad={(e) => {
-                const target = e.currentTarget as HTMLImageElement;
-                if (target.dataset.fallback === "true") {
-                  setTimeout(() => {
-                    target.src = apiUrl(`/cameras/${cam.id}/snapshot?t=${Date.now()}`);
-                  }, 1000);
-                }
-              }}
-              style={{ 
-                width: '100%', 
-                height: '100%', 
-                objectFit: 'cover',
-                transform: isZoomMode ? `scale(${zoomScale}) translate(${zoomOffset.x}px, ${zoomOffset.y}px)` : 'none',
-                transformOrigin: 'center center',
-                transition: isPanning ? 'none' : 'transform 0.1s ease',
-                cursor: isZoomMode ? (isPanning ? 'grabbing' : 'grab') : 'default'
-              }} 
-            />
-          ) : (
-            <>
-              {!connected && (
-                <img 
-                  src={apiUrl(`/cameras/${cam.id}/snapshot`)}
-                  alt={cam.name}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover',
-                    zIndex: 1,
-                    pointerEvents: 'none'
-                  }}
-                />
-              )}
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                playsInline 
-                muted={isMuted} 
-                style={{ 
-                  width: '100%', 
-                  height: '100%', 
-                  objectFit: 'cover',
-                  opacity: connected ? 1 : 0,
-                  transform: isZoomMode ? `scale(${zoomScale}) translate(${zoomOffset.x}px, ${zoomOffset.y}px)` : 'none',
-                  transformOrigin: 'center center',
-                  transition: isPanning ? 'none' : 'transform 0.1s ease, opacity 0.3s ease',
-                  cursor: isZoomMode ? (isPanning ? 'grabbing' : 'grab') : 'default'
-                }} 
-              />
-            </>
-          )}
-          {!connected && (
+          <LivePlayer
+            cameraId={cam.id}
+            quality={quality}
+            muted={isMuted}
+            paused={paused}
+            videoRef={videoRef}
+            onMode={setLiveMode}
+            style={zoomStyle}
+          />
+          {liveMode === 'connecting' && (
             <div className="cam-connecting" style={{ zIndex: 2 }}>
               <div className="spinner" />
               <span style={{ fontSize: '0.72rem', color: 'var(--t3)' }}>Connecting...</span>
             </div>
           )}
         </>
+      ) : (
+        <div className="cam-placeholder">
+          <WifiOff size={26} strokeWidth={1.5} />
+          <span>No Stream URL</span>
+        </div>
       )}
 
       {analytics && (
@@ -509,16 +315,6 @@ const CameraFeedComponent = React.memo<{
           {isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
         </button>
 
-        {/* Two-Way Audio talk */}
-        <button 
-          className="cam-btn" 
-          onClick={toggleMic} 
-          style={{ color: isMicActive ? 'var(--pink)' : 'inherit' }}
-          title={isMicActive ? "Mic Active" : "Two-Way Microphone Talk"}
-        >
-          <Mic size={12} />
-        </button>
-
         {/* Snapshot Capture */}
         <button 
           className="cam-btn" 
@@ -546,7 +342,9 @@ const CameraFeedComponent = React.memo<{
           <Maximize2 size={12} />
         </button>
 
-        {connected && <span className="cam-info">{isMicActive ? 'WebRTC Talk' : 'WebRTC'} - {cam.rtsp_url_sub && !maximized ? 'Sub' : 'Main'}</span>}
+        {(liveMode === 'mse' || liveMode === 'mjpeg') && (
+          <span className="cam-info">{liveMode === 'mse' ? 'Live' : 'MJPEG'} - {quality === 'sub' ? 'Sub' : 'Main'}</span>
+        )}
       </div>
     </div>
   );
@@ -571,7 +369,6 @@ const LiveView: React.FC = () => {
   const [patrolMode, setPatrolMode] = useState(false);
   const [patrolOffset, setPatrolOffset] = useState<number>(0);
 
-  const [iceServers, setIceServers] = useState<RTCIceServer[]>([]);
   const [livePaused, setLivePaused] = useState(false);
   const [syncPaused, setSyncPaused] = useState(false);
   const [syncDate, setSyncDate] = useState(() => inputDate(new Date()));
@@ -582,20 +379,15 @@ const LiveView: React.FC = () => {
 
   // (Clock moved to DigitalClock to prevent re-renders)
 
-  const fetchData = async (loadConfig = false) => {
+  const fetchData = async () => {
     try {
       const c = await fetch(apiUrl('/cameras')).then(r => r.ok ? r.json() : []);
       setCameras(c);
-      const [e, cfg] = await Promise.all([
-        fetch(apiUrl('/events?limit=20')).then(r => r.ok ? r.json() : []),
-        loadConfig ? fetch(apiUrl('/system/config')).then(r => r.ok ? r.json() : null) : Promise.resolve(null),
-      ]);
+      const e = await fetch(apiUrl('/events?limit=20')).then(r => r.ok ? r.json() : []);
       setEvents(e);
-      if (cfg) {
-        const servers = cfg?.network?.ice_servers || [];
-        setIceServers(servers.map((url: string) => ({ urls: url })));
-      }
-    } catch {}
+    } catch {
+      /* keep the last good snapshot */
+    }
   };
 
   const recordingSrc = (url: string) => {
@@ -604,9 +396,14 @@ const LiveView: React.FC = () => {
     return apiUrl(token ? `${url}${separator}token=${encodeURIComponent(token)}` : url);
   };
 
+  const withStart = (url: string, offsetSec: number) => {
+    const base = recordingSrc(url);
+    return `${base}${base.includes('?') ? '&' : '?'}t=${offsetSec.toFixed(3)}`;
+  };
+
   useEffect(() => {
-    fetchData(true);
-    const t = setInterval(() => fetchData(false), 15000);
+    fetchData();
+    const t = setInterval(() => fetchData(), 15000);
     return () => clearInterval(t);
   }, []);
 
@@ -659,7 +456,11 @@ const LiveView: React.FC = () => {
 
   const findRecording = (camId: string, targetMs: number) => {
     const files = recordings[camId] || [];
-    return files.find(r => targetMs >= r.startTimestamp && targetMs <= r.endTimestamp) || files[files.length - 1] || null;
+    const hit = resolvePlaybackTarget(files, targetMs, true);
+    if (!hit) return null;
+    const file = files.find(item => item.url === hit.url);
+    if (!file) return null;
+    return { ...file, playOffset: Math.max(0, (hit.seekMs - hit.startTimestamp) / 1000) };
   };
 
   const seekSyncVideos = (targetMs: number) => {
@@ -668,8 +469,11 @@ const LiveView: React.FC = () => {
       const rec = findRecording(cam.id, targetMs);
       const video = syncVideoRefs.current[cam.id];
       if (rec && video && video.src.includes(rec.url)) {
-        const offset = Math.max(0, (targetMs - rec.startTimestamp) / 1000);
-        video.currentTime = Math.min(offset, Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.5) : offset);
+        const offset = rec.playOffset;
+        const duration = video.duration;
+        if (Number.isFinite(duration) && duration > 1 && offset <= duration + 0.25) {
+          video.currentTime = Math.min(offset, Math.max(0, duration - 0.25));
+        }
       }
     }
   };
@@ -787,15 +591,18 @@ const LiveView: React.FC = () => {
                     {rec ? (
                       <video
                         ref={el => { syncVideoRefs.current[cam.id] = el; }}
-                        key={rec.url}
-                        src={recordingSrc(rec.url)}
+                        key={`${rec.url}@${rec.playOffset.toFixed(3)}`}
+                        src={withStart(rec.url, rec.playOffset)}
                         autoPlay={!syncPaused}
                         muted
                         playsInline
                         onLoadedMetadata={e => {
                           const video = e.currentTarget;
-                          const offset = Math.max(0, (syncTargetMs - rec.startTimestamp) / 1000);
-                          video.currentTime = Math.min(offset, Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.5) : offset);
+                          const offset = rec.playOffset;
+                          const duration = video.duration;
+                          if (Number.isFinite(duration) && duration > 1 && offset <= duration + 0.25) {
+                            video.currentTime = Math.min(offset, Math.max(0, duration - 0.25));
+                          }
                         }}
                       />
                     ) : (
@@ -820,7 +627,6 @@ const LiveView: React.FC = () => {
                 <CameraFeed
                   key={cam.id}
                   cam={cam}
-                  iceServers={iceServers}
                   paused={livePaused}
                   analytics={viewMode === 'analytics'}
                   maximized={maximizedId === cam.id}
@@ -868,8 +674,7 @@ const CameraFeed = React.memo(CameraFeedComponent, (prev, next) => (
   prev.cam.has_motion === next.cam.has_motion &&
   prev.analytics === next.analytics &&
   prev.maximized === next.maximized &&
-  prev.paused === next.paused &&
-  prev.iceServers === next.iceServers
+  prev.paused === next.paused
 ));
 
 export default LiveView;

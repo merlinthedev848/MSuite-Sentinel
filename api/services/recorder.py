@@ -157,7 +157,6 @@ class CameraRecorder:
             "-segment_format_options", "movflags=+faststart",
             "-reset_timestamps", "1",
             "-strftime", "1",
-            "-movflags", "+faststart",         # Web-optimised MP4 — can play before fully downloaded
             output_pattern,
         ])
 
@@ -211,29 +210,30 @@ async def _terminate_process(proc: "asyncio.subprocess.Process", grace: float = 
         pass
 
 
-async def register_go2rtc_stream(name: str, rtsp_url: str):
+async def register_go2rtc_stream(name: str, rtsp_url: str, attempts: int = 5, timeout: float = 3.0) -> bool:
     url = settings.go2rtc_url.rstrip('/')
     if rtsp_url.lower().startswith("rtsp://") and "transport=" not in rtsp_url and "#" not in rtsp_url:
         sep = "&" if "?" in rtsp_url else "?"
         rtsp_url = f"{rtsp_url}{sep}transport=tcp"
-    for attempt in range(1, 6):
+    for attempt in range(1, max(1, attempts) + 1):
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 res = await client.put(
                     f"{url}/api/streams",
                     params={"name": name, "src": rtsp_url},
                 )
                 if res.status_code == 200:
                     logger.info(f"Successfully registered stream {name} in go2rtc (attempt {attempt})")
-                    return
+                    return True
                 else:
                     logger.warning(f"Failed to register stream {name} in go2rtc: {res.status_code} {res.text} (attempt {attempt})")
         except Exception as e:
-            logger.warning(f"Could not connect to go2rtc API at {url} (attempt {attempt}/5): {e}")
+            logger.warning(f"Could not connect to go2rtc API at {url} (attempt {attempt}/{attempts}): {e}")
             if "127.0.0.1" not in url:
                 url = "http://127.0.0.1:1984"
-        if attempt < 5:
-            await asyncio.sleep(2.0)
+        if attempt < attempts:
+            await asyncio.sleep(0.4 if attempts <= 2 else 2.0)
+    return False
 
 
 async def delete_go2rtc_stream(name: str):
