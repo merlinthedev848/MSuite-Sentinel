@@ -232,6 +232,8 @@ async def delete_event(event_id: str, db: AsyncSession = Depends(get_db)):
 
     await db.delete(event)
     await db.commit()
+    _ANALYTICS_CACHE["timestamp"] = 0.0
+    _ANALYTICS_CACHE["data"] = None
     return {"status": "deleted"}
 
 

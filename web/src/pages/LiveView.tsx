@@ -63,10 +63,12 @@ const parseRecording = (r: any): RecordingFile => {
       start = Date.UTC(parseInt(y), parseInt(m) - 1, parseInt(d), parseInt(hr), parseInt(min), parseInt(sec));
     }
   }
+  const segmentMs = Math.max(1, Number(r.duration_seconds) || 60) * 1000;
   return {
     ...r,
     startTimestamp: start,
-    endTimestamp: start + 60000,
+    endTimestamp: start + segmentMs,
+    segmentMs,
   };
 };
 
@@ -664,10 +666,14 @@ const LiveView: React.FC = () => {
 
 const CameraFeed = React.memo(CameraFeedComponent, (prev, next) => (
   prev.cam.id === next.cam.id &&
+  prev.cam.name === next.cam.name &&
   prev.cam.status === next.cam.status &&
+  prev.cam.location === next.cam.location &&
+  prev.cam.onvif_endpoint === next.cam.onvif_endpoint &&
   prev.cam.rtsp_url_main === next.cam.rtsp_url_main &&
   prev.cam.rtsp_url_sub === next.cam.rtsp_url_sub &&
   prev.cam.has_motion === next.cam.has_motion &&
+  JSON.stringify(prev.cam.config) === JSON.stringify(next.cam.config) &&
   prev.analytics === next.analytics &&
   prev.maximized === next.maximized &&
   prev.paused === next.paused

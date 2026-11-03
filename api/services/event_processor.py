@@ -145,7 +145,7 @@ def _mqtt_client() -> MQTTClient:
     if settings.mqtt_username:
         kwargs["username"] = settings.mqtt_username
         kwargs["password"] = settings.mqtt_password or None
-    return MQTTClient(MQTT_BROKER, port=MQTT_PORT, **kwargs)
+    return MQTTClient(settings.mqtt_broker, port=settings.mqtt_port, **kwargs)
 
 
 async def _dispatch(rule_config: dict, event_data: dict) -> None:
@@ -156,12 +156,31 @@ async def _dispatch(rule_config: dict, event_data: dict) -> None:
         channels.append("webhook")
     if rule_config.get("mqtt_topic"):
         channels.append("mqtt")
+    if rule_config.get("discord_webhook_url"):
+        channels.append("discord")
+    if rule_config.get("telegram_bot_token") and rule_config.get("telegram_chat_id"):
+        channels.append("telegram")
+    
+    # Also support channels array or actions from AlertRule config
+    for ch in rule_config.get("channels", []):
+        if ch not in channels:
+            channels.append(ch)
+
+    actions = rule_config.get("actions", [])
+    if "notify" in actions and not channels:
+        if rule_config.get("webhook_url"):
+            channels.append("webhook")
+        if rule_config.get("mqtt_topic"):
+            channels.append("mqtt")
+
     if not channels:
         return
     payload = {
         "channels": channels,
-        "webhook_url": rule_config.get("webhook_url"),
+        "webhook_url": rule_config.get("webhook_url") or rule_config.get("discord_webhook_url"),
         "mqtt_topic": rule_config.get("mqtt_topic"),
+        "bot_token": rule_config.get("telegram_bot_token") or rule_config.get("bot_token"),
+        "chat_id": rule_config.get("telegram_chat_id") or rule_config.get("chat_id"),
     }
 
     async def _run():
@@ -305,7 +324,7 @@ async def _persist_detection(data: dict) -> None:
 
 async def process_mqtt_events():
     """Listen for detector events. A failed snapshot is not treated as signal loss."""
-    logger.info("Connecting to MQTT broker at %s:%s", MQTT_BROKER, MQTT_PORT)
+    logger.info("Connecting to MQTT broker at %s:%s", settings.mqtt_broker, settings.mqtt_port)
     mqtt_backoff = 2
     while True:
         try:

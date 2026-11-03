@@ -4,6 +4,7 @@ import os
 from typing import Optional
 import httpx
 from aiomqtt import Client as MQTTClient
+from api.config import settings
 
 logger = logging.getLogger("mView-Notifications")
 
@@ -14,9 +15,16 @@ class NotificationService:
     Supports Webhooks, Discord, Telegram, and MQTT.
     """
     def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
-        self.mqtt_broker = os.getenv("MQTT_BROKER", "localhost")
         self._http_client = http_client
         logger.info("Notification Service Initialized.")
+
+    @property
+    def mqtt_broker(self) -> str:
+        return settings.mqtt_broker
+
+    @property
+    def mqtt_port(self) -> int:
+        return settings.mqtt_port
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -99,7 +107,16 @@ class NotificationService:
             return
             
         try:
-            async with MQTTClient(self.mqtt_broker) as client:
+            client_kwargs = {
+                "hostname": settings.mqtt_broker,
+                "port": settings.mqtt_port,
+            }
+            if settings.mqtt_username:
+                client_kwargs["username"] = settings.mqtt_username
+            if settings.mqtt_password:
+                client_kwargs["password"] = settings.mqtt_password
+
+            async with MQTTClient(**client_kwargs) as client:
                 await client.publish(topic, payload=json.dumps(event_data))
                 logger.info(f"MQTT notification published to {topic}")
         except Exception as e:

@@ -170,7 +170,8 @@ async def export_evidence(req: ExportRequest):
     else:
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as concat_file:
             for item in matching:
-                concat_file.write(f"file '{str(item.resolve())}'\n")
+                escaped_path = str(item.resolve()).replace("'", "'\\''")
+                concat_file.write(f"file '{escaped_path}'\n")
             concat_path = concat_file.name
 
         cmd = [

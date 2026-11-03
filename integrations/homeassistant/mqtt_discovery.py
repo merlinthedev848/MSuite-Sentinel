@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import Optional
 from aiomqtt import Client as MQTTClient
 
 logger = logging.getLogger("mView-HomeAssistant")
@@ -9,9 +10,19 @@ class HomeAssistantDiscovery:
     Publishes Home Assistant MQTT auto-discovery payloads for mView Sentinel.
     This makes cameras and AI events automatically appear in Home Assistant without manual YAML configuration.
     """
-    def __init__(self, mqtt_broker: str, prefix: str = "homeassistant"):
+    def __init__(
+        self,
+        mqtt_broker: str,
+        prefix: str = "homeassistant",
+        port: int = 1883,
+        username: Optional[str] = None,
+        password: Optional[str] = None
+    ):
         self.mqtt_broker = mqtt_broker
         self.prefix = prefix
+        self.port = port
+        self.username = username
+        self.password = password
         self.device = {
             "identifiers": ["mview_sentinel_nvr"],
             "name": "mView Sentinel",
@@ -54,7 +65,16 @@ class HomeAssistantDiscovery:
 
     async def _publish(self, topic: str, payload: dict):
         try:
-            async with MQTTClient(self.mqtt_broker) as client:
+            client_kwargs = {
+                "hostname": self.mqtt_broker,
+                "port": self.port,
+            }
+            if self.username:
+                client_kwargs["username"] = self.username
+            if self.password:
+                client_kwargs["password"] = self.password
+
+            async with MQTTClient(**client_kwargs) as client:
                 await client.publish(topic, payload=json.dumps(payload), retain=True)
                 logger.info(f"Published HA discovery for {topic}")
         except Exception as e:

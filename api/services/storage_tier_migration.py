@@ -47,7 +47,7 @@ class StorageTierMigration:
             dest_cam_dir = self.cold_storage_dir / cam_dir.name
             dest_cam_dir.mkdir(parents=True, exist_ok=True)
 
-            for file_path in cam_dir.glob("*.mp4"):
+            for file_path in list(cam_dir.rglob("*.mp4")):
                 try:
                     stat = file_path.stat()
                     file_time = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
@@ -55,7 +55,9 @@ class StorageTierMigration:
                     continue
 
                 if file_time < cutoff_time:
-                    dest_file = dest_cam_dir / file_path.name
+                    rel = file_path.relative_to(cam_dir)
+                    dest_file = dest_cam_dir / rel
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
                     try:
                         file_size = stat.st_size
                         shutil.move(str(file_path), str(dest_file))

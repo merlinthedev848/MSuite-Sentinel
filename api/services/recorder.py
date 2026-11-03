@@ -773,7 +773,8 @@ def locate_recording(camera_id: str, filename: str) -> Path | None:
     export_dir = Path(settings.export_path) if hasattr(settings, "export_path") else Path(settings.storage_path) / "exports"
     exported = export_dir / filename
     if exported.is_file() and contained_path(export_dir, exported) is not None:
-        return exported
+        if filename.startswith(f"evidence_") or filename.startswith(f"{cid}_"):
+            return exported
     return None
 
 
@@ -799,7 +800,7 @@ def storage_report() -> dict:
         cam_bytes = 0
         day_bytes = 0
         latest = None
-        for f in cam_dir.glob("*.mp4"):
+        for f in _iter_camera_mp4s(cam_dir):
             try:
                 stat = f.stat()
             except OSError:

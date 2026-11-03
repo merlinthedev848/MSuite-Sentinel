@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Body, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, Body, Depends, UploadFile, File, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from api.database import get_db
 from api.models.camera import Camera
+from api.routers.cameras import _require_settings
 import shutil
 import os
 import uuid
@@ -47,8 +48,9 @@ def _write_config(config: dict) -> None:
 import aiofiles
 
 @router.post("/upload")
-async def upload_floorplan(file: UploadFile = File(...)):
+async def upload_floorplan(request: Request, file: UploadFile = File(...)):
     """Upload a floorplan image to the server."""
+    _require_settings(request)
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid image file")
     
@@ -76,8 +78,9 @@ async def upload_floorplan(file: UploadFile = File(...)):
 
 
 @router.post("/{map_id}/cameras")
-async def save_camera_positions(map_id: str, positions: list = Body(...), db: AsyncSession = Depends(get_db)):
+async def save_camera_positions(map_id: str, request: Request, positions: list = Body(...), db: AsyncSession = Depends(get_db)):
     """Save camera [x, y, rotation] coordinates for the Map View."""
+    _require_settings(request)
     valid_positions = []
     for item in positions:
         if not isinstance(item, dict) or not item.get("id"):

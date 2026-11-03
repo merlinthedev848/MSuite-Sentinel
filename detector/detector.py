@@ -14,6 +14,7 @@ os.environ.setdefault(
 import cv2
 from ultralytics import YOLO
 import paho.mqtt.client as mqtt
+from accelerator import HardwareAccelerator
 from semantic_search import semantic_engine
 from motion import motion_gate
 from PIL import Image
@@ -24,7 +25,12 @@ logger = logging.getLogger("mView-Detector")
 MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MODEL_NAME = os.getenv("DETECTOR_MODEL", "yolov8n.pt")
-ACCELERATOR = os.getenv("ACCELERATOR", "cpu").lower()
+ACCELERATOR_SETTING = os.getenv("ACCELERATOR", "cpu").lower()
+ACCELERATOR = (
+    HardwareAccelerator.detect_best_backend()
+    if ACCELERATOR_SETTING in ("auto", "recommended", "")
+    else ACCELERATOR_SETTING
+)
 FRAME_STRIDE = max(1, int(os.getenv("FRAME_STRIDE", "6")))
 IMAGE_SIZE = int(os.getenv("IMAGE_SIZE", "640"))
 MIN_CONFIDENCE = float(os.getenv("MIN_CONFIDENCE", "0.5"))
@@ -128,7 +134,11 @@ class DetectorNode:
 
     def _ensure_mqtt(self):
         if self.mqtt_client is not None:
-            return
+            try:
+                if self.mqtt_client.is_connected():
+                    return
+            except Exception:
+                pass
         now = time.time()
         if now - self._last_mqtt_attempt < 10.0:
             return

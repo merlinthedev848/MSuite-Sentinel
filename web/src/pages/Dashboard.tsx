@@ -41,6 +41,7 @@ export const Dashboard = () => {
   const [events, setEvents] = useState<DashboardEvent[]>([]);
   const [storage, setStorage] = useState<{ free_gb: number; total_gb: number; usage_percent: number } | null>(null);
   const [recordingStorage, setRecordingStorage] = useState<{ total_gb: number } | null>(null);
+  const [systemStatus, setSystemStatus] = useState<string>('online');
   const [stats, setStats] = useState({ total_cameras: 0, online_cameras: 0, events_today: 0 });
   const [analytics, setAnalytics] = useState<{ total_events: number; hourly: { hour: string; count: number }[]; top_classes: { class: string; count: number }[] } | null>(null);
 
@@ -77,6 +78,7 @@ export const Dashboard = () => {
 
         if (healthRes.ok) {
           const healthData = await healthRes.json();
+          if (healthData && healthData.status) setSystemStatus(healthData.status);
           if (healthData && healthData.storage) setStorage(healthData.storage);
         }
 
@@ -138,11 +140,11 @@ export const Dashboard = () => {
     },
     {
       label: 'System Health',
-      value: 'OK',
-      detail: 'online',
+      value: systemStatus === 'online' ? 'OK' : 'Degraded',
+      detail: systemStatus,
       icon: Activity,
-      tone: 'var(--green)',
-      background: 'rgba(142, 170, 148, 0.12)',
+      tone: systemStatus === 'online' ? 'var(--green)' : 'var(--amber)',
+      background: systemStatus === 'online' ? 'rgba(142, 170, 148, 0.12)' : 'rgba(245, 158, 11, 0.12)',
     },
     {
       label: 'NVR Archive Size',

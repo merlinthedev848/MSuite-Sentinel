@@ -324,10 +324,15 @@ async def delete_nvr(nvr_id: str, remove_cameras: bool = True, db: AsyncSession 
     if not nvr:
         raise HTTPException(404, "NVR not found")
     if remove_cameras:
+        import asyncio
+        from api.services.recorder import purge_all_recordings
         cams = (await db.execute(select(Camera))).scalars().all()
         for cam in cams:
             if (cam.config or {}).get("nvr_id") == nvr_id:
+                # Delete associated events to prevent FK violations
+                await db.execute(delete(SemanticEvent).where(SemanticEvent.camera_id == cam.id))
                 await db.delete(cam)
+                await asyncio.to_thread(purge_all_recordings, cam.id)
     await db.delete(nvr)
     await db.commit()
     await _refresh_recorders(db)
@@ -337,7 +342,26 @@ async def delete_nvr(nvr_id: str, remove_cameras: bool = True, db: AsyncSession 
 @router.get("/alert-rules")
 async def list_alert_rules(db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(AlertRule).order_by(AlertRule.created_at.desc()))).scalars().all()
-    return [{**(row.config or {}), "id": row.id, "name": row.name, "enabled": row.enabled, "severity": row.severity} for row in rows]
+    results = []
+    for row in rows:
+        cfg = dict(row.config or {})
+        # Only return operations alert rules (or normalize automation rules)
+        results.append({
+            "objects": ["person"],
+            "camera_ids": [],
+            "schedule": "always",
+            "zone": "any",
+            "condition": "present",
+            "threshold_seconds": 0,
+            "cooldown_seconds": 120,
+            "actions": ["record", "notify"],
+            **cfg,
+            "id": row.id,
+            "name": row.name,
+            "enabled": row.enabled,
+            "severity": row.severity or "medium",
+        })
+    return results
 
 
 @router.post("/alert-rules", status_code=201)

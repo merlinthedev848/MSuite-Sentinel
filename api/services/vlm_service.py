@@ -51,7 +51,11 @@ class VLMService:
 
     async def _analyze_gemini(self, image_bytes: bytes, classes_str: str) -> dict:
         b64_data = base64.b64encode(image_bytes).decode("utf-8")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={settings.gemini_api_key}"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        headers = {
+            "x-goog-api-key": settings.gemini_api_key,
+            "Content-Type": "application/json",
+        }
         
         prompt = (
             f"Analyze this security camera frame. YOLO detected: {classes_str}. "
@@ -82,15 +86,18 @@ class VLMService:
 
         try:
             client = await self._get_client()
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, headers=headers, json=payload)
             if resp.status_code == 200:
                 data = resp.json()
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                return json.loads(self._clean_json_text(text))
+                candidates = data.get("candidates") or []
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts") or []
+                    if parts and parts[0].get("text"):
+                        return json.loads(self._clean_json_text(parts[0]["text"]))
             else:
-                logger.error(f"Gemini API returned status {resp.status_code}: {resp.text}")
+                logger.error(f"Gemini API returned status {resp.status_code}")
         except Exception as e:
-            logger.error(f"Failed to analyze frame with Gemini: {e}")
+            logger.error(f"Failed to analyze frame with Gemini: {type(e).__name__}")
 
         return self._local_fallback(classes_str.split(", "))
 

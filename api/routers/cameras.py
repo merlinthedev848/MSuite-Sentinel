@@ -117,6 +117,11 @@ async def delete_camera(camera_id: str, request: Request, db: AsyncSession = Dep
     await db.delete(cam)
     await db.commit()
 
+    # Cancel active PTZ tour if running
+    if camera_id in _active_tours:
+        _active_tours[camera_id].cancel()
+        _active_tours.pop(camera_id, None)
+
     # Purge video recording files and stop active streams
     from api.services.recorder import purge_all_recordings
     await asyncio.to_thread(purge_all_recordings, camera_id)
@@ -295,7 +300,8 @@ async def get_ptz_presets(camera_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{camera_id}/ptz/presets")
-async def save_ptz_preset(camera_id: str, req: PTZPresetRequest, db: AsyncSession = Depends(get_db)):
+async def save_ptz_preset(camera_id: str, req: PTZPresetRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    _require_settings(request)
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam:
@@ -355,7 +361,8 @@ async def goto_ptz_preset(camera_id: str, req: PTZPresetRequest, db: AsyncSessio
 
 
 @router.post("/{camera_id}/ptz/tour")
-async def toggle_ptz_tour(camera_id: str, req: PTZTourRequest, db: AsyncSession = Depends(get_db)):
+async def toggle_ptz_tour(camera_id: str, req: PTZTourRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    _require_settings(request)
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam:
@@ -387,8 +394,9 @@ async def toggle_ptz_tour(camera_id: str, req: PTZTourRequest, db: AsyncSession 
 
 
 @router.post("/discover", response_model=List[ONVIFDiscoveryResult])
-async def discover_cameras():
+async def discover_cameras(request: Request):
     """Scan network for ONVIF cameras (WS-Discovery + IP range scan fallback)."""
+    _require_settings(request)
     try:
         return await onvif_service.discover_cameras(timeout=4)
     except Exception as e:

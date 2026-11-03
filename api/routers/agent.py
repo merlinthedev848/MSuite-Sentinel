@@ -2,14 +2,16 @@ import httpx
 import os
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel
 from api.database import get_db
 from api.models.camera import Camera
 from api.models.ai import SemanticEvent
 from api.config import settings
+from api.routers.system import _read_config_file, CONFIG_PATH
 
 logger = logging.getLogger("mView-Agent")
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -44,8 +46,9 @@ async def run_update_camera(db: AsyncSession, camera_id: str, name: str = None, 
     
     if name:
         cam.name = name
-    if location:
+    if location is not None:
         cam.location = location
+        flag_modified(cam, "config")
     if rtsp_url_main or rtsp_url_sub:
         return "Refusing to change a camera stream URL from the assistant. Update streams from Settings."
         
@@ -57,19 +60,33 @@ async def run_update_camera(db: AsyncSession, camera_id: str, name: str = None, 
 
 async def run_update_system_config(db: AsyncSession, retention_days: int = None) -> str:
     if retention_days is not None:
-        settings.retention_days = retention_days
-        return f"System video retention set to {retention_days} days."
+        days = max(0, min(365, int(retention_days)))
+        settings.retention_days = days
+        try:
+            import yaml
+            data = _read_config_file()
+            data.setdefault("recordings", {})["retention_days"] = days
+            with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+                yaml.safe_dump(data, fh, default_flow_style=False)
+        except Exception as e:
+            logger.warning(f"Could not persist retention_days to config file: {e}")
+        return f"System video retention set to {days} days."
     return "No configurations updated."
 
 async def run_get_recent_events(db: AsyncSession, limit: int = 10) -> str:
-    result = await db.execute(select(SemanticEvent).order_by(SemanticEvent.timestamp.desc()).limit(limit))
+    safe_limit = max(1, min(100, int(limit or 10)))
+    result = await db.execute(select(SemanticEvent).order_by(SemanticEvent.timestamp.desc()).limit(safe_limit))
     events = result.scalars().all()
     if not events:
         return "No recent events logged."
     return "\n".join([f"- {e.timestamp.strftime('%H:%M:%S')}: {e.object_class} (Confidence: {int((e.confidence or 0)*100)}%) on Camera {e.camera_id[:8]}" for e in events])
 
-async def execute_tool(name: str, args: dict, db: AsyncSession) -> str:
+async def execute_tool(name: str, args: dict, db: AsyncSession, can_change_settings: bool = False) -> str:
     try:
+        if not isinstance(args, dict):
+            args = {}
+        if name in ("update_camera", "update_system_config") and not can_change_settings:
+            return "Permission denied: Settings permission is required to modify cameras or system configuration."
         if name == "get_system_health":
             return await run_get_system_health(db)
         elif name == "get_cameras":
@@ -85,16 +102,23 @@ async def execute_tool(name: str, args: dict, db: AsyncSession) -> str:
         return f"Error executing tool: {str(e)}"
     return f"Unknown tool: {name}"
 
-async def handle_gemini_agent(req: ChatRequest, db: AsyncSession) -> dict:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={settings.gemini_api_key}"
+async def handle_gemini_agent(req: ChatRequest, db: AsyncSession, can_change_settings: bool = False) -> dict:
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    headers = {
+        "x-goog-api-key": settings.gemini_api_key,
+        "Content-Type": "application/json",
+    }
     
     contents = []
     for item in req.history:
-        role = "user" if item.get("role") == "user" else "model"
-        contents.append({
-            "role": role,
-            "parts": [{"text": item.get("content", "")}]
-        })
+        raw_role = item.get("role", "user")
+        role = "model" if raw_role in ("model", "assistant") else "user"
+        text = item.get("content", "")
+        if text:
+            contents.append({
+                "role": role,
+                "parts": [{"text": text}]
+            })
     contents.append({
         "role": "user",
         "parts": [{"text": req.message}]
@@ -158,9 +182,9 @@ async def handle_gemini_agent(req: ChatRequest, db: AsyncSession) -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, headers=headers, json=payload)
             if resp.status_code != 200:
-                logger.error(f"Gemini API returned status {resp.status_code}: {resp.text}")
+                logger.error(f"Gemini API returned status {resp.status_code}")
                 return {"response": f"Gemini API error ({resp.status_code}): {resp.text[:200]}"}
             
             data = resp.json()
@@ -172,25 +196,30 @@ async def handle_gemini_agent(req: ChatRequest, db: AsyncSession) -> dict:
             function_calls = [p["functionCall"] for p in parts if isinstance(p, dict) and "functionCall" in p]
             
             if function_calls:
-                call = function_calls[0]
-                func_name = call.get("name")
-                func_args = call.get("args", {})
-                
-                logger.info(f"AI Operator triggered function call: {func_name} with {func_args}")
-                tool_result = await execute_tool(func_name, func_args, db)
-                
-                contents.append({
-                    "role": "model",
-                    "parts": [{"functionCall": call}]
-                })
-                contents.append({
-                    "role": "user",
-                    "parts": [{
+                model_parts = []
+                response_parts = []
+                last_result = ""
+                for call in function_calls:
+                    func_name = call.get("name")
+                    func_args = call.get("args", {})
+                    logger.info(f"AI Operator triggered function call: {func_name} with {func_args}")
+                    tool_result = await execute_tool(func_name, func_args, db, can_change_settings)
+                    last_result = tool_result
+                    model_parts.append({"functionCall": call})
+                    response_parts.append({
                         "functionResponse": {
                             "name": func_name,
                             "response": {"result": tool_result}
                         }
-                    }]
+                    })
+                
+                contents.append({
+                    "role": "model",
+                    "parts": model_parts
+                })
+                contents.append({
+                    "role": "user",
+                    "parts": response_parts
                 })
                 
                 follow_up_payload = {
@@ -199,25 +228,27 @@ async def handle_gemini_agent(req: ChatRequest, db: AsyncSession) -> dict:
                     "systemInstruction": payload["systemInstruction"]
                 }
                 
-                resp2 = await client.post(url, json=follow_up_payload)
+                resp2 = await client.post(url, headers=headers, json=follow_up_payload)
                 if resp2.status_code == 200:
                     data2 = resp2.json()
                     candidates2 = data2.get("candidates", [])
                     if candidates2:
                         parts2 = candidates2[0].get("content", {}).get("parts", [])
-                        if parts2 and "text" in parts2[0]:
-                            return {"response": parts2[0]["text"]}
-                    return {"response": f"Action executed successfully ({func_name})."}
+                        text_parts = [p["text"] for p in parts2 if isinstance(p, dict) and "text" in p]
+                        if text_parts:
+                            return {"response": "\n".join(text_parts)}
+                    return {"response": f"Action executed successfully ({function_calls[0].get('name')})."}
                 else:
-                    return {"response": f"Action completed with result: {tool_result}"}
+                    return {"response": f"Action completed with result: {last_result}"}
             else:
-                text = parts[0].get("text", "I'm not sure how to answer that.") if parts else "No response generated."
+                text_parts = [p["text"] for p in parts if isinstance(p, dict) and "text" in p]
+                text = "\n".join(text_parts) if text_parts else "No response generated."
                 return {"response": text}
     except Exception as e:
-        logger.error(f"Gemini agent failed: {e}")
-        return {"response": f"Failed to execute agent loop: {str(e)}"}
+        logger.error(f"Gemini agent failed: {type(e).__name__}")
+        return {"response": "Failed to execute Gemini agent request."}
 
-async def handle_openai_agent(req: ChatRequest, db: AsyncSession) -> dict:
+async def handle_openai_agent(req: ChatRequest, db: AsyncSession, can_change_settings: bool = False) -> dict:
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.openai_api_key}",
@@ -228,7 +259,11 @@ async def handle_openai_agent(req: ChatRequest, db: AsyncSession) -> dict:
         {"role": "system", "content": "You are the Sentinel NVR Active AI Operator. You have direct control over camera configuration, system health query, and settings. Be helpful, concise, and professional. Always tell the user when you perform actions."}
     ]
     for item in req.history:
-        messages.append({"role": item["role"], "content": item["content"]})
+        raw_role = item.get("role", "user")
+        role = "assistant" if raw_role in ("model", "assistant") else "user"
+        content = item.get("content", "")
+        if content:
+            messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": req.message})
 
     tools = [
@@ -307,20 +342,23 @@ async def handle_openai_agent(req: ChatRequest, db: AsyncSession) -> dict:
             tool_calls = message.get("tool_calls", [])
             
             if tool_calls:
-                call = tool_calls[0]
-                func_name = call["function"]["name"]
-                func_args = json.loads(call["function"]["arguments"])
-                
-                logger.info(f"AI Operator triggered OpenAI function call: {func_name} with {func_args}")
-                tool_result = await execute_tool(func_name, func_args, db)
-                
                 messages.append(message)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "name": func_name,
-                    "content": tool_result
-                })
+                for call in tool_calls:
+                    func_name = call.get("function", {}).get("name", "")
+                    try:
+                        func_args = json.loads(call.get("function", {}).get("arguments") or "{}")
+                    except Exception:
+                        func_args = {}
+                    
+                    logger.info(f"AI Operator triggered OpenAI function call: {func_name} with {func_args}")
+                    tool_result = await execute_tool(func_name, func_args, db, can_change_settings)
+                    
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "name": func_name,
+                        "content": tool_result
+                    })
                 
                 payload = {
                     "model": "gpt-4o-mini",
@@ -330,15 +368,15 @@ async def handle_openai_agent(req: ChatRequest, db: AsyncSession) -> dict:
                 resp2 = await client.post(url, headers=headers, json=payload)
                 if resp2.status_code == 200:
                     data2 = resp2.json()
-                    final_text = data2["choices"][0]["message"]["content"]
+                    final_text = data2["choices"][0]["message"].get("content") or "Action executed."
                     return {"response": final_text}
                 else:
-                    return {"response": f"Successfully ran action, but explanation failed: {resp2.text}"}
+                    return {"response": f"Successfully ran action, but explanation failed: {resp2.text[:200]}"}
             else:
-                return {"response": message.get("content", "I'm not sure how to answer that.")}
+                return {"response": message.get("content") or "I'm not sure how to answer that."}
     except Exception as e:
-        logger.error(f"OpenAI agent failed: {e}")
-        return {"response": f"Failed to execute agent loop: {str(e)}"}
+        logger.error(f"OpenAI agent failed: {type(e).__name__}")
+        return {"response": "Failed to execute OpenAI agent request."}
 
 async def handle_fallback_agent(message: str, db: AsyncSession) -> dict:
     msg = message.lower()
@@ -361,10 +399,13 @@ async def handle_fallback_agent(message: str, db: AsyncSession) -> dict:
     }
 
 @router.post("/chat")
-async def chat_agent(req: ChatRequest, db: AsyncSession = Depends(get_db)):
+async def chat_agent(req: ChatRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    role = getattr(request.state, "user_role", "")
+    perms = set(getattr(request.state, "user_permissions", []) or [])
+    can_change_settings = role == "admin" or "settings" in perms
     provider = settings.ai_provider
     if provider == "gemini" and settings.gemini_api_key:
-        return await handle_gemini_agent(req, db)
+        return await handle_gemini_agent(req, db, can_change_settings)
     elif provider == "openai" and settings.openai_api_key:
-        return await handle_openai_agent(req, db)
+        return await handle_openai_agent(req, db, can_change_settings)
     return await handle_fallback_agent(req.message, db)
