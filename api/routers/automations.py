@@ -44,6 +44,21 @@ async def list_automations(db: AsyncSession = Depends(get_db)):
 @router.post("", response_model=AutomationRule)
 async def create_automation(rule: AutomationRule, db: AsyncSession = Depends(get_db)):
     """Create or update an automation rule in database."""
+    if not (rule.webhook_url or rule.mqtt_topic):
+        raise HTTPException(400, "Automation rule must specify at least one action (webhook_url or mqtt_topic)")
+
+    if rule.webhook_url:
+        from api.security import webhook_target_allowed
+        if not webhook_target_allowed(rule.webhook_url):
+            raise HTTPException(400, "Webhook URL must be a valid public http(s) address")
+
+    if rule.camera_id:
+        from api.security import safe_camera_id
+        try:
+            safe_camera_id(rule.camera_id)
+        except ValueError:
+            raise HTTPException(400, "Invalid camera id")
+
     rule_id = rule.id or f"rule_{str(uuid.uuid4())[:8]}"
 
     existing = await db.get(AlertRule, rule_id) if rule.id else None

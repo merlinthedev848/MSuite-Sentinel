@@ -56,7 +56,8 @@ class LocalCore:
             if queue.full():
                 with contextlib.suppress(asyncio.QueueEmpty):
                     queue.get_nowait()
-            queue.put_nowait(event)
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(event)
 
     async def update_snapshot(self, **values: Any) -> dict[str, Any]:
         async with self._lock:

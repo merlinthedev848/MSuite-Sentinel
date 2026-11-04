@@ -21,19 +21,32 @@ const Events: React.FC = () => {
   };
 
   useEffect(() => {
+    let active = true;
     fetch(apiUrl('/cameras'))
       .then(r => (r.ok ? r.json() : []))
       .then(data => {
-        if (Array.isArray(data)) setCameras(data);
+        if (active && Array.isArray(data)) setCameras(data);
       })
       .catch(() => {});
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
+    let active = true;
     if (searchQuery.trim() !== '') return;
-    loadEvents();
-    const t = setInterval(loadEvents, 5000);
-    return () => clearInterval(t);
+    const fetchLatest = async () => {
+      try {
+        const res = await fetch(apiUrl('/events?limit=200'));
+        if (res.ok && active) setEvents(await res.json());
+      } catch {}
+      if (active) setLoading(false);
+    };
+    fetchLatest();
+    const t = setInterval(fetchLatest, 5000);
+    return () => {
+      active = false;
+      clearInterval(t);
+    };
   }, [searchQuery]);
 
   const cameraNameById = useMemo(() => {
@@ -175,8 +188,9 @@ const Events: React.FC = () => {
                     if (ev.id) {
                       fetch(apiUrl(`/events/${ev.id}/review`), { method: 'PATCH' }).catch(() => {});
                     }
-                    if (ev.camera_id && ev.timestamp) {
-                      navigate(`/playback?camera=${ev.camera_id}&time=${ev.timestamp}`);
+                    if (ev.camera_id) {
+                      const timeQuery = ev.timestamp ? `&time=${encodeURIComponent(ev.timestamp)}` : '';
+                      navigate(`/playback?camera=${encodeURIComponent(ev.camera_id)}${timeQuery}`);
                     }
                   }}
                   style={{ cursor: ev.camera_id ? 'pointer' : 'default' }}

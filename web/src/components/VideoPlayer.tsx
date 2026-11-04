@@ -72,11 +72,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
       const res = await fetch(apiUrl(`/cameras/${cameraId}/snapshot?t=${Date.now()}`));
       if (!res.ok) return;
       const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
+      a.href = blobUrl;
       a.download = stamp;
       a.click();
-      URL.revokeObjectURL(a.href);
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
     } catch {
       /* snapshot endpoint unavailable */
     }

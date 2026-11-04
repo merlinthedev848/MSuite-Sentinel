@@ -25,13 +25,19 @@ class MotionGating:
         """
         Returns True if motion (pixel change) exceeds the threshold.
         """
-        # Downscale for faster processing
-        small_frame = cv2.resize(frame, (640, 360))
-        fg_mask = self.bg_subtractor.apply(small_frame)
-        
-        # Count non-zero (white) pixels in the mask
-        motion_pixels = cv2.countNonZero(fg_mask)
-        
-        return motion_pixels > self.threshold
+        if frame is None or getattr(frame, "size", 0) == 0:
+            return False
+        try:
+            # Downscale for faster processing
+            small_frame = cv2.resize(frame, (640, 360))
+            fg_mask = self.bg_subtractor.apply(small_frame)
+            
+            # Count non-zero (white) pixels in the mask
+            motion_pixels = cv2.countNonZero(fg_mask)
+            
+            return motion_pixels > self.threshold
+        except Exception as exc:
+            logger.debug("Motion gating error: %s", exc)
+            return True
 
 motion_gate = MotionGating()

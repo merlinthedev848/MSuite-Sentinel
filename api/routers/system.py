@@ -338,6 +338,17 @@ async def backup_database(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can create backups")
 
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        existing_backups = sorted(EXPORT_DIR.glob("mview-backup-*.json"), key=lambda p: p.stat().st_mtime)
+        if len(existing_backups) >= 10:
+            for old_backup in existing_backups[:-9]:
+                try:
+                    old_backup.unlink()
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
     from datetime import datetime, timezone
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     backup_path = EXPORT_DIR / f"mview-backup-{timestamp}.json"
@@ -473,8 +484,10 @@ async def update_system_config(config: SystemConfigUpdate):
     data["updates"] = config.updates.model_dump()
 
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+        tmp_path = CONFIG_PATH.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as fh:
             yaml.safe_dump(data, fh, default_flow_style=False)
+        tmp_path.replace(CONFIG_PATH)
     except Exception as e:
         raise HTTPException(500, f"Failed to write configuration: {e}")
         

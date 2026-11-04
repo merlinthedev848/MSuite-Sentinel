@@ -32,18 +32,26 @@ class ZoneAnalytics:
         Check if an object's bottom-center point is inside any defined zones.
         Returns a list of zone_ids the object has intruded.
         """
-        x1, y1, x2, y2 = object_bbox
-        # Calculate bottom center of bounding box (usually where the feet/tires are)
-        bottom_center = (int((x1 + x2) / 2), int(y2))
-        
-        intrusions = []
-        for zone_id, polygon in self.zones.items():
-            # cv2.pointPolygonTest returns > 0 if inside
-            result = cv2.pointPolygonTest(polygon, bottom_center, False)
-            if result >= 0:
-                intrusions.append(zone_id)
-                
-        return intrusions
+        if not isinstance(object_bbox, (list, tuple)) or len(object_bbox) != 4:
+            return []
+        try:
+            x1, y1, x2, y2 = [int(v) for v in object_bbox]
+            # Calculate bottom center of bounding box (usually where the feet/tires are)
+            bottom_center = (int((x1 + x2) / 2), int(y2))
+            
+            intrusions = []
+            for zone_id, polygon in self.zones.items():
+                if polygon is None or len(polygon) < 3:
+                    continue
+                # cv2.pointPolygonTest returns > 0 if inside
+                result = cv2.pointPolygonTest(polygon, bottom_center, False)
+                if result >= 0:
+                    intrusions.append(zone_id)
+                    
+            return intrusions
+        except Exception as exc:
+            logger.debug("Zone intrusion check failed: %s", exc)
+            return []
 
     def check_line_cross(self, object_track_history: list) -> list:
         """

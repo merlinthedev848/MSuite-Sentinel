@@ -108,9 +108,13 @@ async def delete_camera(camera_id: str, request: Request, db: AsyncSession = Dep
     if not cam:
         raise HTTPException(404, "Camera not found")
     
-    # Cascade delete associated events to avoid foreign key violations
+    # Cascade delete associated events and reviews to avoid foreign key violations
     from sqlalchemy import delete
     from api.models.ai import SemanticEvent
+    from api.models.operations import EventReview
+    event_ids = (await db.execute(select(SemanticEvent.id).where(SemanticEvent.camera_id == camera_id))).scalars().all()
+    if event_ids:
+        await db.execute(delete(EventReview).where(EventReview.event_id.in_(event_ids)))
     await db.execute(delete(SemanticEvent).where(SemanticEvent.camera_id == camera_id))
 
     # Delete camera record
@@ -244,32 +248,38 @@ _active_tours: dict[str, asyncio.Task] = {}
 
 
 async def _run_camera_tour(camera_id: str, interval: int):
-    while True:
-        try:
+    try:
+        while True:
             from api.database import async_session_maker
             async with async_session_maker() as session:
                 cam = await session.get(Camera, camera_id)
                 if not cam or not (cam.config or {}).get("ptz", {}).get("tour_enabled"):
                     break
                 presets = (cam.config or {}).get("ptz", {}).get("presets", [])
-                if not presets or not cam.onvif_endpoint:
+                onvif_ep = cam.onvif_endpoint
+                onvif_user = cam.onvif_username or ""
+                onvif_pass = cam.onvif_password or ""
+                if not presets or not onvif_ep:
                     break
 
             for preset in presets:
                 preset_name = preset if isinstance(preset, str) else preset.get("name")
-                if preset_name and cam.onvif_endpoint:
+                if preset_name and onvif_ep:
                     await asyncio.to_thread(
                         onvif_service.goto_preset,
-                        cam.onvif_endpoint,
-                        cam.onvif_username or "",
-                        cam.onvif_password or "",
+                        onvif_ep,
+                        onvif_user,
+                        onvif_pass,
                         preset_name,
                     )
                 await asyncio.sleep(interval)
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger("sentinel.ptz").warning("PTZ tour error for camera %s: %s", camera_id, exc)
+    finally:
+        _active_tours.pop(camera_id, None)
 
 
 @router.get("/{camera_id}/ptz/presets")
@@ -404,38 +414,42 @@ async def discover_cameras(request: Request):
 
 
 def get_default_rtsp_paths(manufacturer: str | None, model: str | None, ip: str, username: str, password: str) -> tuple[str, str | None]:
+    import urllib.parse
     m = (manufacturer or "").lower()
+    enc_user = urllib.parse.quote(username, safe="") if username else ""
+    enc_pass = urllib.parse.quote(password, safe="") if password else ""
+    creds = f"{enc_user}:{enc_pass}@" if enc_user else ""
     
     if "hikvision" in m or "hik" in m:
         return (
-            f"rtsp://{username}:{password}@{ip}:554/Streaming/Channels/101",
-            f"rtsp://{username}:{password}@{ip}:554/Streaming/Channels/102"
+            f"rtsp://{creds}{ip}:554/Streaming/Channels/101",
+            f"rtsp://{creds}{ip}:554/Streaming/Channels/102"
         )
     elif "dahua" in m or "amcrest" in m or "lts" in m:
         return (
-            f"rtsp://{username}:{password}@{ip}:554/cam/realmonitor?channel=1&subtype=0",
-            f"rtsp://{username}:{password}@{ip}:554/cam/realmonitor?channel=1&subtype=1"
+            f"rtsp://{creds}{ip}:554/cam/realmonitor?channel=1&subtype=0",
+            f"rtsp://{creds}{ip}:554/cam/realmonitor?channel=1&subtype=1"
         )
     elif "reolink" in m:
         return (
-            f"rtsp://{username}:{password}@{ip}:554/h264Preview_01_main",
-            f"rtsp://{username}:{password}@{ip}:554/h264Preview_01_sub"
+            f"rtsp://{creds}{ip}:554/h264Preview_01_main",
+            f"rtsp://{creds}{ip}:554/h264Preview_01_sub"
         )
     elif "axis" in m:
         return (
-            f"rtsp://{username}:{password}@{ip}:554/axis-media/media.amp",
+            f"rtsp://{creds}{ip}:554/axis-media/media.amp",
             None
         )
     elif "foscam" in m:
         return (
-            f"rtsp://{username}:{password}@{ip}:554/videoMain",
-            f"rtsp://{username}:{password}@{ip}:554/videoSub"
+            f"rtsp://{creds}{ip}:554/videoMain",
+            f"rtsp://{creds}{ip}:554/videoSub"
         )
     else:
         # Generic fallback
         return (
-            f"rtsp://{username}:{password}@{ip}:554/stream1",
-            f"rtsp://{username}:{password}@{ip}:554/stream2"
+            f"rtsp://{creds}{ip}:554/stream1",
+            f"rtsp://{creds}{ip}:554/stream2"
         )
 
 
@@ -472,17 +486,17 @@ async def adopt_camera(
     def inject_rtsp_credentials(rtsp_url: str | None, user: str, psw: str) -> str | None:
         if not rtsp_url or not user:
             return rtsp_url
-        # If credentials already embedded, skip
-        if "@" in rtsp_url.split("//")[-1]:
-            return rtsp_url
-        prefix = "rtsp://"
-        if rtsp_url.startswith("rtsps://"):
-            prefix = "rtsps://"
-        body = rtsp_url[len(prefix):]
         import urllib.parse
-        encoded_user = urllib.parse.quote(user)
-        encoded_pass = urllib.parse.quote(psw)
-        return f"{prefix}{encoded_user}:{encoded_pass}@{body}"
+        parsed = urllib.parse.urlsplit(rtsp_url)
+        if parsed.username or "@" in (parsed.netloc or ""):
+            return rtsp_url
+        scheme = parsed.scheme or "rtsp"
+        enc_user = urllib.parse.quote(user, safe="")
+        enc_pass = urllib.parse.quote(psw, safe="")
+        host_port = parsed.netloc or parsed.path
+        path = parsed.path if parsed.netloc else ""
+        netloc = f"{enc_user}:{enc_pass}@{host_port}"
+        return urllib.parse.urlunsplit((scheme, netloc, path, parsed.query, parsed.fragment))
 
     if streams:
         rtsp_main = inject_rtsp_credentials(streams[0].get("rtsp_url"), username, password)

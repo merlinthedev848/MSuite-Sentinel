@@ -221,7 +221,11 @@ class ONVIFService:
             cam = self._connect_from_endpoint(onvif_endpoint, username, password)
             media = cam.create_media_service()
             ptz = cam.create_ptz_service()
-            profile = media.GetProfiles()[0]
+            profiles = media.GetProfiles()
+            if not profiles:
+                logger.error("No ONVIF media profiles found on %s", onvif_endpoint)
+                return False
+            profile = profiles[0]
             request = ptz.create_type("ContinuousMove")
             request.ProfileToken = profile.token
             x, y, z = self._ptz_velocity(action, speed)
@@ -241,7 +245,11 @@ class ONVIFService:
             cam = self._connect_from_endpoint(onvif_endpoint, username, password)
             media = cam.create_media_service()
             ptz = cam.create_ptz_service()
-            profile = media.GetProfiles()[0]
+            profiles = media.GetProfiles()
+            if not profiles:
+                logger.error("No ONVIF media profiles found on %s", onvif_endpoint)
+                return False
+            profile = profiles[0]
             request = ptz.create_type("Stop")
             request.ProfileToken = profile.token
             request.PanTilt = True
@@ -272,7 +280,11 @@ class ONVIFService:
             cam = self._connect_from_endpoint(onvif_endpoint, username, password)
             media = cam.create_media_service()
             ptz = cam.create_ptz_service()
-            profile = media.GetProfiles()[0]
+            profiles = media.GetProfiles()
+            if not profiles:
+                logger.error("No ONVIF media profiles found on %s", onvif_endpoint)
+                return []
+            profile = profiles[0]
             presets = ptz.GetPresets({"ProfileToken": profile.token})
             result = []
             for p in presets:
@@ -290,7 +302,11 @@ class ONVIFService:
             cam = self._connect_from_endpoint(onvif_endpoint, username, password)
             media = cam.create_media_service()
             ptz = cam.create_ptz_service()
-            profile = media.GetProfiles()[0]
+            profiles = media.GetProfiles()
+            if not profiles:
+                logger.error("No ONVIF media profiles found on %s", onvif_endpoint)
+                return None
+            profile = profiles[0]
             request = ptz.create_type("SetPreset")
             request.ProfileToken = profile.token
             request.PresetName = preset_name
@@ -307,7 +323,11 @@ class ONVIFService:
             cam = self._connect_from_endpoint(onvif_endpoint, username, password)
             media = cam.create_media_service()
             ptz = cam.create_ptz_service()
-            profile = media.GetProfiles()[0]
+            profiles = media.GetProfiles()
+            if not profiles:
+                logger.error("No ONVIF media profiles found on %s", onvif_endpoint)
+                return False
+            profile = profiles[0]
 
             target_token = preset_identifier
             try:

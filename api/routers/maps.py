@@ -43,9 +43,13 @@ def _read_config() -> dict:
 
 def _write_config(config: dict) -> None:
     import json
-    CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    tmp_path = CONFIG_PATH.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    tmp_path.replace(CONFIG_PATH)
 
 import aiofiles
+
+MAX_MAP_BYTES = 25 * 1024 * 1024  # 25 MB max
 
 @router.post("/upload")
 async def upload_floorplan(request: Request, file: UploadFile = File(...)):
@@ -65,9 +69,21 @@ async def upload_floorplan(request: Request, file: UploadFile = File(...)):
     if Path(UPLOAD_DIR).resolve() not in target_path.parents:
         raise HTTPException(status_code=400, detail="Invalid destination path")
     
-    async with aiofiles.open(target_path, "wb") as buffer:
-        while chunk := await file.read(1024 * 1024):
-            await buffer.write(chunk)
+    bytes_read = 0
+    try:
+        async with aiofiles.open(target_path, "wb") as buffer:
+            while chunk := await file.read(1024 * 1024):
+                bytes_read += len(chunk)
+                if bytes_read > MAX_MAP_BYTES:
+                    raise HTTPException(status_code=413, detail="File too large (max 25MB)")
+                await buffer.write(chunk)
+    except Exception:
+        if target_path.exists():
+            try:
+                target_path.unlink()
+            except OSError:
+                pass
+        raise
 
     config = _read_config()
     config.update({"map_id": file_id, "floorplan_url": _public_url(filename), "floorplan_file": filename})

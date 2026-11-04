@@ -191,6 +191,16 @@ async def lifespan(app: FastAPI):
 
         # ── Shutdown ─────────────────────────────────────────────────────
         recorder_manager.stop_all()
+        try:
+            from api.services.notification_service import notification_service
+            await notification_service.close()
+        except Exception:
+            pass
+        try:
+            from api.services.vlm_service import vlm_service
+            await vlm_service.close()
+        except Exception:
+            pass
         if hasattr(app.state, "http_client") and app.state.http_client:
             await app.state.http_client.aclose()
         await engine.dispose()
@@ -471,6 +481,10 @@ _TRANSCODE_LOCKS: dict[str, asyncio.Lock] = {}
 def _transcode_lock(path: str) -> asyncio.Lock:
     lock = _TRANSCODE_LOCKS.get(path)
     if lock is None:
+        if len(_TRANSCODE_LOCKS) > 200:
+            unlocked = [p for p, l in _TRANSCODE_LOCKS.items() if not l.locked()]
+            for p in unlocked:
+                _TRANSCODE_LOCKS.pop(p, None)
         lock = asyncio.Lock()
         _TRANSCODE_LOCKS[path] = lock
     return lock
@@ -501,9 +515,11 @@ async def _build_browser_cache(src: Path, dest: Path) -> None:
             stderr=asyncio.subprocess.DEVNULL,
         )
         try:
-            await proc.wait()
+            await asyncio.wait_for(proc.wait(), timeout=120.0)
             if proc.returncode == 0 and tmp.exists() and tmp.stat().st_size >= 10240:
                 tmp.replace(dest)
+        except (asyncio.TimeoutError, Exception):
+            pass
         finally:
             await _terminate_process(proc)
             if tmp.exists() and not dest.exists():

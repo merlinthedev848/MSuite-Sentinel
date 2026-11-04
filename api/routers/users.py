@@ -164,6 +164,10 @@ async def update_user(
             user.username = username
 
     if payload.role is not None:
+        if current_user.get("id") == user_id and payload.role != "admin":
+            admin_count_res = await db.execute(select(User).where(User.role == "admin"))
+            if len(admin_count_res.scalars().all()) <= 1:
+                raise HTTPException(status_code=400, detail="Cannot demote the last remaining admin")
         user.role = payload.role
 
     if payload.permissions is not None:

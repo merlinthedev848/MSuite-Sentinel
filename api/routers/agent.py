@@ -66,8 +66,10 @@ async def run_update_system_config(db: AsyncSession, retention_days: int = None)
             import yaml
             data = _read_config_file()
             data.setdefault("recordings", {})["retention_days"] = days
-            with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+            tmp_path = CONFIG_PATH.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as fh:
                 yaml.safe_dump(data, fh, default_flow_style=False)
+            tmp_path.replace(CONFIG_PATH)
         except Exception as e:
             logger.warning(f"Could not persist retention_days to config file: {e}")
         return f"System video retention set to {days} days."
@@ -79,7 +81,14 @@ async def run_get_recent_events(db: AsyncSession, limit: int = 10) -> str:
     events = result.scalars().all()
     if not events:
         return "No recent events logged."
-    return "\n".join([f"- {e.timestamp.strftime('%H:%M:%S')}: {e.object_class} (Confidence: {int((e.confidence or 0)*100)}%) on Camera {e.camera_id[:8]}" for e in events])
+    formatted = []
+    for e in events:
+        ts_str = e.timestamp.strftime('%H:%M:%S') if e.timestamp else "N/A"
+        cam_str = str(e.camera_id)[:8] if e.camera_id else "unknown"
+        conf_pct = int((e.confidence or 0) * 100)
+        cls_name = e.object_class or "motion"
+        formatted.append(f"- {ts_str}: {cls_name} (Confidence: {conf_pct}%) on Camera {cam_str}")
+    return "\n".join(formatted)
 
 async def execute_tool(name: str, args: dict, db: AsyncSession, can_change_settings: bool = False) -> str:
     try:
@@ -400,8 +409,9 @@ async def handle_fallback_agent(message: str, db: AsyncSession) -> dict:
 
 @router.post("/chat")
 async def chat_agent(req: ChatRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    role = getattr(request.state, "user_role", "")
-    perms = set(getattr(request.state, "user_permissions", []) or [])
+    user = getattr(request.state, "user", None) or {}
+    role = user.get("role", "")
+    perms = set(user.get("permissions") or [])
     can_change_settings = role == "admin" or "settings" in perms
     provider = settings.ai_provider
     if provider == "gemini" and settings.gemini_api_key:

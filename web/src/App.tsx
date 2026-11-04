@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
-import { Video, PlaySquare, Bell, Settings as SettingsIcon, ShieldCheck, HardDrive, LogOut, Wifi, LayoutDashboard, Map, Bot, Send, X, Volume2, VolumeX } from 'lucide-react';
+import { BrowserRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import { Video, PlaySquare, Bell, Settings as SettingsIcon, ShieldCheck, HardDrive, LogOut, Wifi, LayoutDashboard, Map, Bot, Send, X, Volume2, VolumeX, Tv } from 'lucide-react';
 
 import Login     from './pages/Login';
 import { apiUrl } from './lib/endpoints';
@@ -91,31 +91,53 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
       } catch {}
     };
 
-    const eventsSource = new EventSource(apiUrl('/system/live'));
+    let eventsSource: EventSource | null = null;
+    let reconnectTimeout: number | undefined;
+    let sseActive = true;
 
-    const handleSnapshot = (event: MessageEvent) => {
-      try {
-        const message = JSON.parse(event.data);
-        applySnapshot(message.payload);
-      } catch {}
+    const connectSSE = () => {
+      if (!sseActive) return;
+      if (eventsSource) {
+        try { eventsSource.close(); } catch {}
+      }
+      eventsSource = new EventSource(apiUrl('/system/live'));
+      eventsSource.addEventListener('snapshot', (event: MessageEvent) => {
+        try {
+          const message = JSON.parse(event.data);
+          applySnapshot(message.payload);
+        } catch {}
+      });
+      eventsSource.addEventListener('ai_event', () => {
+        audioAlerts.playChime('threat');
+      });
+      eventsSource.onerror = () => {
+        if (!sseActive) return;
+        try { eventsSource?.close(); } catch {}
+        load();
+        if (!fallbackTimer) {
+          fallbackTimer = window.setInterval(load, 15000);
+        }
+        window.clearTimeout(reconnectTimeout);
+        reconnectTimeout = window.setTimeout(() => {
+          if (sseActive) connectSSE();
+        }, 5000);
+      };
+      eventsSource.onopen = () => {
+        if (fallbackTimer) {
+          window.clearInterval(fallbackTimer);
+          fallbackTimer = undefined;
+        }
+      };
     };
 
-    const handleAiEvent = () => {
-      audioAlerts.playChime('threat');
-    };
-
-    eventsSource.addEventListener('snapshot', handleSnapshot);
-    eventsSource.addEventListener('ai_event', handleAiEvent);
-    eventsSource.onerror = () => {
-      eventsSource.close();
-      load();
-      fallbackTimer = window.setInterval(load, 15000);
-    };
+    connectSSE();
 
     return () => {
-      eventsSource.removeEventListener('snapshot', handleSnapshot);
-      eventsSource.removeEventListener('ai_event', handleAiEvent);
-      eventsSource.close();
+      sseActive = false;
+      window.clearTimeout(reconnectTimeout);
+      if (eventsSource) {
+        try { eventsSource.close(); } catch {}
+      }
       if (fallbackTimer) window.clearInterval(fallbackTimer);
     };
   }, []);
@@ -124,13 +146,14 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
   const unreadEvents = events.length;
 
   const navItems = [
-    { to: '/dashboard',  label: 'Dashboard',   icon: <LayoutDashboard size={16} />, end: false },
-    { to: '/',           label: 'Live View',   icon: <Video           size={16} />, end: true  },
-    { to: '/map',        label: 'Spatial Map', icon: <Map             size={16} />, end: false },
-    { to: '/playback',   label: 'Playback',    icon: <PlaySquare      size={16} />, end: false },
-    { to: '/events',     label: 'Events',      icon: <Bell            size={16} />, end: false, badge: unreadEvents || undefined },
-    { to: '/operations', label: 'Operations',  icon: <HardDrive       size={16} />, end: false },
-    { to: '/settings',   label: 'Settings',    icon: <SettingsIcon    size={16} />, end: false },
+    { to: '/dashboard',  label: 'Dashboard',     icon: <LayoutDashboard size={16} />, end: false },
+    { to: '/',           label: 'Live View',     icon: <Video           size={16} />, end: true  },
+    { to: '/wallboard',  label: 'Wallboard NOC', icon: <Tv              size={16} />, end: false },
+    { to: '/map',        label: 'Spatial Map',   icon: <Map             size={16} />, end: false },
+    { to: '/playback',   label: 'Playback',      icon: <PlaySquare      size={16} />, end: false },
+    { to: '/events',     label: 'Events',        icon: <Bell            size={16} />, end: false, badge: unreadEvents || undefined },
+    { to: '/operations', label: 'Operations',    icon: <HardDrive       size={16} />, end: false },
+    { to: '/settings',   label: 'Settings',      icon: <SettingsIcon    size={16} />, end: false },
   ];
 
   return (
@@ -399,9 +422,49 @@ class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { 
   }
 }
 
+function AuthenticatedShell({ onLogout }: { onLogout: () => void }) {
+  const [showAIDrawer, setShowAIDrawer] = useState(false);
+  const location = useLocation();
+  const isWallboard = location.pathname === '/wallboard';
+
+  if (isWallboard) {
+    return (
+      <AppErrorBoundary>
+        <Suspense fallback={<div className="empty">Loading Wallboard NOC...</div>}>
+          <Wallboard />
+        </Suspense>
+      </AppErrorBoundary>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <Sidebar onLogout={onLogout} onToggleAI={() => setShowAIDrawer(!showAIDrawer)} showAIActive={showAIDrawer} />
+      <div className="main-content">
+        <AppErrorBoundary>
+          <Suspense fallback={<div className="empty">Loading...</div>}>
+            <Routes>
+              <Route path="/"           element={<LiveView />}    />
+              <Route path="/login"      element={<LiveView />}    />
+              <Route path="/dashboard"  element={<Dashboard />}   />
+              <Route path="/map"        element={<MapView />}     />
+              <Route path="/playback"   element={<Playback />}    />
+              <Route path="/events"     element={<Events />}      />
+              <Route path="/operations" element={<Operations />}  />
+              <Route path="/settings"   element={<Settings />}    />
+              <Route path="/wallboard"  element={<Wallboard />}   />
+              <Route path="*"           element={<LiveView />}    />
+            </Routes>
+          </Suspense>
+        </AppErrorBoundary>
+      </div>
+      <AIOperatorDrawer isOpen={showAIDrawer} onClose={() => setShowAIDrawer(false)} />
+    </div>
+  );
+}
+
 function App() {
   const [session, setSession] = useState<'checking' | 'in' | 'out'>('checking');
-  const [showAIDrawer, setShowAIDrawer] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -440,42 +503,9 @@ function App() {
     return <Login onLogin={handleLogin} />;
   }
 
-  if (window.location.pathname === '/wallboard') {
-    return (
-      <Router>
-        <AppErrorBoundary>
-          <Suspense fallback={<div className="empty">Loading...</div>}>
-            <Wallboard />
-          </Suspense>
-        </AppErrorBoundary>
-      </Router>
-    );
-  }
-
   return (
     <Router>
-      <div className="app-shell">
-        <Sidebar onLogout={handleLogout} onToggleAI={() => setShowAIDrawer(!showAIDrawer)} showAIActive={showAIDrawer} />
-        <div className="main-content">
-          <AppErrorBoundary>
-            <Suspense fallback={<div className="empty">Loading...</div>}>
-              <Routes>
-                <Route path="/"           element={<LiveView />}    />
-                <Route path="/login"      element={<LiveView />}    />
-                <Route path="/dashboard"  element={<Dashboard />}   />
-                <Route path="/map"        element={<MapView />}     />
-                <Route path="/playback"   element={<Playback />}    />
-                <Route path="/events"     element={<Events />}      />
-                <Route path="/operations" element={<Operations />}  />
-                <Route path="/settings"   element={<Settings />}    />
-                <Route path="/wallboard"  element={<Wallboard />}   />
-                <Route path="*"           element={<LiveView />}    />
-              </Routes>
-            </Suspense>
-          </AppErrorBoundary>
-        </div>
-        <AIOperatorDrawer isOpen={showAIDrawer} onClose={() => setShowAIDrawer(false)} />
-      </div>
+      <AuthenticatedShell onLogout={handleLogout} />
     </Router>
   );
 }

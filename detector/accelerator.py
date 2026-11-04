@@ -16,11 +16,17 @@ class HardwareAccelerator:
         
         # 1. Check for NVIDIA GPU
         try:
-            subprocess.run(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            subprocess.run(
+                ["nvidia-smi"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                timeout=3.0,
+            )
             logger.info("NVIDIA GPU detected. Using CUDA/TensorRT backend.")
             # If tensorrt is installed, prefer it, else fallback to cuda
             return "tensorrt" if HardwareAccelerator._has_tensorrt() else "cuda"
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
             pass
 
         # 2. Check for Intel OpenVINO (requires compatible CPU/iGPU)

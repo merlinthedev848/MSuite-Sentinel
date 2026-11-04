@@ -60,4 +60,4 @@ async def publish_camera_discovery(cameras: list) -> None:
             await publisher.register_camera(camera.id, camera.name or camera.id)
         except Exception as exc:
             logger.warning("Home Assistant discovery skipped for %s: %s", camera.id, exc)
-            return
+            continue

@@ -371,6 +371,42 @@ for source_file in (ROOT / "web" / "src").rglob("*"):
         web_hits.append(str(source_file.relative_to(ROOT)))
 check("dashboard does not keep the session token", not web_hits, ", ".join(web_hits))
 
+# Audit Verification: Motion Gating, Zone Analytics, and Operations Center Resilience
+motion_source = (ROOT / "detector" / "motion.py").read_text()
+check("motion gate handles None frame guard", "frame is None" in motion_source and "return False" in motion_source)
+
+zones_source = (ROOT / "detector" / "zones.py").read_text()
+check("zone analytics checks bbox bounds", "len(object_bbox) != 4" in zones_source)
+
+ops_source = (ROOT / "api" / "routers" / "operations.py").read_text()
+check("operations health center uses async to_thread", "asyncio.to_thread(_recording_dir_size)" in ops_source)
+
+detector_source = (ROOT / "detector" / "detector.py").read_text()
+check("detector cleans up mqtt loop threads", "_disconnect_mqtt" in detector_source and "loop_stop()" in detector_source)
+
+accelerator_source = (ROOT / "detector" / "accelerator.py").read_text()
+check("hardware accelerator bounds nvidia-smi with timeout", "timeout=3.0" in accelerator_source and "TimeoutExpired" in accelerator_source)
+
+event_proc_source = (ROOT / "api" / "services" / "event_processor.py").read_text()
+check("event processor prunes last zone events", "len(_LAST_ZONE_EVENTS) > 1000" in event_proc_source)
+
+events_source = (ROOT / "api" / "routers" / "events.py").read_text()
+check("events list does not block on os.path.exists in loop", "os.path.exists(e.thumbnail_path)" not in events_source)
+check("delete event cascades to event review", "delete(EventReview)" in events_source)
+
+maps_source = (ROOT / "api" / "routers" / "maps.py").read_text()
+check("maps config uses atomic replace", "tmp_path.replace(CONFIG_PATH)" in maps_source)
+check("maps upload enforces file size limit", "MAX_MAP_BYTES" in maps_source)
+
+users_source = (ROOT / "api" / "routers" / "users.py").read_text()
+check("users router protects last admin from self-demotion", "Cannot demote the last remaining admin" in users_source)
+
+onvif_source = (ROOT / "api" / "services" / "onvif_service.py").read_text()
+check("onvif service guards empty profiles", "if not profiles:" in onvif_source)
+
+recorder_source = (ROOT / "api" / "services" / "recorder.py").read_text()
+check("recorder handles clean stop return codes", "not self._stop and proc.returncode" in recorder_source)
+
 if failures:
     print(f"\n{len(failures)} check(s) failed")
     sys.exit(1)

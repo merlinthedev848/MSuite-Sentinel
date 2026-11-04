@@ -184,8 +184,11 @@ async def _dispatch(rule_config: dict, event_data: dict) -> None:
     }
 
     async def _run():
-        async with _NOTIFY_LIMIT:
-            await notification_service.dispatch(payload, event_data)
+        try:
+            async with _NOTIFY_LIMIT:
+                await notification_service.dispatch(payload, event_data)
+        except Exception as exc:
+            logger.error("Notification dispatch failed: %s", exc)
 
     asyncio.create_task(_run())
 
@@ -271,6 +274,11 @@ async def _persist_detection(data: dict) -> None:
             if event_time - _LAST_ZONE_EVENTS.get(cooldown_key, 0) < cooldown:
                 continue
             _LAST_ZONE_EVENTS[cooldown_key] = event_time
+            if len(_LAST_ZONE_EVENTS) > 1000:
+                cutoff = event_time - 3600.0
+                stale = [k for k, v in _LAST_ZONE_EVENTS.items() if v < cutoff]
+                for k in stale:
+                    _LAST_ZONE_EVENTS.pop(k, None)
 
             event_id = str(uuid.uuid4())
             thumb_path = None

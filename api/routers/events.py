@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, not_, exists
+from sqlalchemy import select, desc, not_, exists, delete
 
 from api.config import settings
 from api.database import get_db, engine
@@ -69,7 +69,7 @@ async def get_events(
             "object_class": e.object_class or "unknown",
             "confidence": e.confidence,
             "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-            "has_thumbnail": bool(e.thumbnail_path and os.path.exists(e.thumbnail_path)),
+            "has_thumbnail": bool(e.thumbnail_path),
             "review": {
                 "verdict": reviews[e.id].verdict,
                 "note": reviews[e.id].note or "",
@@ -126,7 +126,7 @@ async def search_events(req: EventSearchRequest, db: AsyncSession = Depends(get_
                 "object_class": e.object_class or "unknown",
                 "confidence": e.confidence,
                 "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-                "has_thumbnail": bool(e.thumbnail_path and os.path.exists(e.thumbnail_path)),
+                "has_thumbnail": bool(e.thumbnail_path),
                 "review": {
                     "verdict": reviews[e.id].verdict,
                     "note": reviews[e.id].note or "",
@@ -230,6 +230,7 @@ async def delete_event(event_id: str, db: AsyncSession = Depends(get_db)):
         except OSError:
             pass
 
+    await db.execute(delete(EventReview).where(EventReview.event_id == event_id))
     await db.delete(event)
     await db.commit()
     _ANALYTICS_CACHE["timestamp"] = 0.0

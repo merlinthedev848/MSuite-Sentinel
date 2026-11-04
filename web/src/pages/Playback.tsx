@@ -185,6 +185,15 @@ const Playback: React.FC = () => {
     loadCameras();
   }, [initCamId]);
 
+  useEffect(() => {
+    if (initCamId && cameras.length > 0) {
+      const cam = cameras.find((c: Camera) => c.id === initCamId);
+      if (cam && cam.id !== selectedCam?.id) {
+        setSelectedCam(cam);
+      }
+    }
+  }, [initCamId, cameras, selectedCam?.id]);
+
   const rememberRecordings = (next: RecordingFile[]) => {
     recordingsRef.current = next;
     setRecordings(next);

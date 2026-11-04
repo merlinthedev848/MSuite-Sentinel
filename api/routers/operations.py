@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -162,16 +163,19 @@ def _recording_dir_size() -> dict[str, Any]:
     files = 0
     total = 0
     newest: float | None = None
-    if root.exists():
-        for path in root.rglob("*"):
-            if path.is_file():
-                try:
-                    stat = path.stat()
-                except OSError:
-                    continue
-                files += 1
-                total += stat.st_size
-                newest = max(newest or stat.st_mtime, stat.st_mtime)
+    try:
+        if root.exists():
+            for path in root.rglob("*"):
+                if path.is_file():
+                    try:
+                        stat = path.stat()
+                    except OSError:
+                        continue
+                    files += 1
+                    total += stat.st_size
+                    newest = max(newest or stat.st_mtime, stat.st_mtime)
+    except Exception:
+        pass
     return {
         "files": files,
         "gb": round(total / (1024 ** 3), 3),
@@ -186,7 +190,7 @@ async def health_center(db: AsyncSession = Depends(get_db)):
     events = (await db.execute(select(SemanticEvent).order_by(SemanticEvent.timestamp.desc()).limit(25))).scalars().all()
     recorder_status = recorder_manager.status()
     actively_recording = {cid for cid, state in recorder_status.items() if state == "recording"}
-    storage = _recording_dir_size()
+    storage = await asyncio.to_thread(_recording_dir_size)
     offline = [cam for cam in cameras if cam.status == "offline" or not cam.enabled]
     recording_gaps = [cam for cam in cameras if cam.enabled and cam.id not in actively_recording]
 
@@ -324,7 +328,6 @@ async def delete_nvr(nvr_id: str, remove_cameras: bool = True, db: AsyncSession 
     if not nvr:
         raise HTTPException(404, "NVR not found")
     if remove_cameras:
-        import asyncio
         from api.services.recorder import purge_all_recordings
         cams = (await db.execute(select(Camera))).scalars().all()
         for cam in cams:

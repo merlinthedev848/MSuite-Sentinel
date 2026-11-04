@@ -200,7 +200,7 @@ class CameraRecorder:
         finally:
             await _terminate_process(proc)
 
-        if proc.returncode not in (0, 255):  # 255 = SIGTERM (normal stop)
+        if not self._stop and proc.returncode not in (0, 255, -15, 143):
             err = "\n".join(stderr_lines) if stderr_lines else "unknown"
             raise RuntimeError(f"ffmpeg exited {proc.returncode}: {err[-300:]}")
 
@@ -795,7 +795,11 @@ def storage_report() -> dict:
 
     total_bytes = 0
     total_day_bytes = 0
-    for cam_dir in sorted([d for d in base.iterdir() if d.is_dir()]):
+    try:
+        cam_dirs = sorted([d for d in base.iterdir() if d.is_dir()])
+    except OSError:
+        cam_dirs = []
+    for cam_dir in cam_dirs:
         files = []
         cam_bytes = 0
         day_bytes = 0

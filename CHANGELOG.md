@@ -7,6 +7,16 @@ All notable changes, fixes, security enhancements, and performance optimizations
 ## Unreleased
 
 ### Security
+- Validated webhook URLs and camera identifiers in automations at creation time to prevent SSRF and path manipulation.
+- Encoded credentials in default RTSP camera paths and camera adoption streams with proper URI quoting.
+- Bound rate-limiting failure tracking and transcode locks with periodic pruning to prevent memory exhaustion.
+- Enforced bounded timeouts on hardware accelerator detection subprocesses to eliminate startup deadlocks on unresponsive GPU drivers.
+- Protected event processor zone cooldowns with bounded eviction policies to prevent perpetual memory accumulation.
+- Guarded administrative user updates against self-demotion when only one admin remains, preventing complete system lockout.
+- Enforced a 25 MB payload limit on floorplan image uploads and guaranteed cleanup of partial uploads on network interruptions.
+- Cascaded event deletions to remove orphan entries from the event reviews table upon single event and camera deletions.
+- Required at least one action destination (webhook URL or MQTT topic) when creating automation rules.
+- Retained the 10 most recent JSON database backups, automatically pruning older backup files to prevent disk exhaustion.
 - The dashboard session is an HTTP-only cookie. Media and event-stream URLs no longer carry the token, and the page does not keep it in `localStorage`. Bearer tokens remain for the mobile app and scripts.
 - Schema changes are recorded in `schema_migrations` and applied in order on startup, including databases created before `token_version` existed.
 - Floorplans require a signed-in user. Camera adoption sends the password in the request body.
@@ -18,7 +28,29 @@ All notable changes, fixes, security enhancements, and performance optimizations
 - Stopped returning camera and NVR passwords to users who only have live access.
 - Applied `sentinel.yml` when the environment does not set the same value.
 
+### Usability & UI/UX
+- Unified application navigation and layout routing by integrating the full-screen Wallboard / NOC mode directly into the primary sidebar with dedicated icon and route handling.
+- Enhanced Wallboard NOC display with a live digital clock, online camera status counter, responsive full-screen toggling, and explicit return-to-dashboard navigation fallback when no cameras are configured.
+- Streamlined event-to-playback drilldowns across Dashboard and Events pages with URL query encoding and camera state synchronization, ensuring immediate playback seeking when navigating between events on the same camera.
+- Hardened AI Operator agent tools with safe fallbacks against null timestamps and camera identifiers, ensuring uninterrupted conversational operation during database anomalies.
+
 ### Behavior
+- Added `onTouchCancel` event handlers to physical PTZ camera controls to ensure continuous motor motion stops immediately when mobile touch gestures are interrupted.
+- Protected snapshot blob downloads from race conditions by deferring `URL.revokeObjectURL` until after the browser download manager begins processing.
+- Added active unmount guards to `Dashboard.tsx` and `Events.tsx` polling hooks to prevent state updates after component teardown.
+- Eliminated synchronous `os.path.exists` filesystem queries within event listing comprehensions, resolving event loop stalls when retrieving large event batches.
+- Applied atomic file replacement staging for map configuration persistence (`default.json`).
+- Guarded ONVIF camera media profile queries against `IndexError` when physical cameras report uninitialized or empty media profiles.
+- Added graceful return code recognition (SIGTERM/clean stop) in the recorder loop to eliminate false error logs on normal camera shutdown.
+- Offloaded operations center health check storage scans (`_recording_dir_size`) to a worker thread via `asyncio.to_thread` to prevent multi-second event loop stalls.
+- Hardened Paho MQTT client management in the detector node with explicit socket and loop termination (`loop_stop()`, `disconnect()`) to eliminate background thread leakage.
+- Added defensive guards against null or zero-dimension video frames in motion gating pre-filtering and zone spatial calculations.
+- Added graceful asynchronous shutdown hooks for notification and vision-language services during application lifecycle termination.
+- Offloaded incident video export file inspections to worker threads, added 180s subprocess execution timeouts, and guaranteed cleanup of temporary concatenation files.
+- Corrected request user state extraction in the AI assistant router (`api/routers/agent.py`) so admin role and settings permissions are properly recognized.
+- Added automatic exponential backoff reconnection for real-time SSE event streaming (`/system/live`) in the frontend shell.
+- Fixed Home Assistant MQTT discovery iteration to continue registering remaining cameras if one camera encounters a connection error.
+- Made system configuration file persistence atomic via temporary file staging to prevent corruption during unexpected shutdowns.
 - The API listens on `0.0.0.0:8000` before it talks to Postgres. A database connection that never returns no longer leaves the process up with the port closed.
 - `python /serve_api.py` adds `/app` to the module path before importing `api.main`. The launcher script lives outside that directory, so without this the process holds port 8000 and cannot load the app.
 - The detector container starts `/app/entrypoint.sh`, which is where the image copies the script. `/entrypoint.sh` is a link to that file, so a last-layer rebuild satisfies the old path without reinstalling the detector packages.

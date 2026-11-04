@@ -68,7 +68,15 @@ def _locked_out(key: str) -> bool:
 
 
 def _record_failure(key: str) -> None:
-    _login_failures.setdefault(key, []).append(time.time())
+    now = time.time()
+    if len(_login_failures) > 500:
+        stale = [
+            k for k, v in _login_failures.items()
+            if not v or now - v[-1] >= _LOGIN_WINDOW_SECONDS
+        ]
+        for k in stale:
+            _login_failures.pop(k, None)
+    _login_failures.setdefault(key, []).append(now)
 
 
 def _clear_failures(key: str) -> None:

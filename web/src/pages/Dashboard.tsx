@@ -48,6 +48,7 @@ export const Dashboard = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
+    let active = true;
     const fetchData = async () => {
       try {
         const [camRes, eventRes, healthRes, analyticsRes, storageRes] = await Promise.all([
@@ -57,6 +58,8 @@ export const Dashboard = () => {
           fetch(apiUrl('/events/analytics')),
           fetch(apiUrl('/system/storage-report')),
         ]);
+
+        if (!active) return;
 
         if (camRes.ok) {
           const camData = await camRes.json();
@@ -98,7 +101,10 @@ export const Dashboard = () => {
 
     fetchData();
     const interval = window.setInterval(fetchData, 5000);
-    return () => window.clearInterval(interval);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
   }, []);
 
   const cameraNameById = useMemo(() => {
@@ -241,9 +247,14 @@ export const Dashboard = () => {
                     <div 
                       key={event.id} 
                       onClick={() => {
-                        fetch(apiUrl(`/events/${event.id}/review`), { method: 'PATCH' }).catch(console.error);
-                        setEvents(e => e.filter(x => x.id !== event.id));
-                        navigate(`/playback?camera=${event.camera_id}&time=${event.timestamp}`);
+                        if (event.id) {
+                          fetch(apiUrl(`/events/${event.id}/review`), { method: 'PATCH' }).catch(console.error);
+                          setEvents(e => e.filter(x => x.id !== event.id));
+                        }
+                        if (event.camera_id) {
+                          const timeQuery = event.timestamp ? `&time=${encodeURIComponent(event.timestamp)}` : '';
+                          navigate(`/playback?camera=${encodeURIComponent(event.camera_id)}${timeQuery}`);
+                        }
                       }}
                       style={{ 
                         display: 'flex', 

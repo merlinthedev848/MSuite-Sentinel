@@ -93,7 +93,9 @@ class VLMService:
                 if candidates:
                     parts = candidates[0].get("content", {}).get("parts") or []
                     if parts and parts[0].get("text"):
-                        return json.loads(self._clean_json_text(parts[0]["text"]))
+                        parsed = json.loads(self._clean_json_text(parts[0]["text"]))
+                        if isinstance(parsed, dict) and "description" in parsed:
+                            return parsed
             else:
                 logger.error(f"Gemini API returned status {resp.status_code}")
         except Exception as e:
@@ -142,7 +144,9 @@ class VLMService:
             if resp.status_code == 200:
                 data = resp.json()
                 text = data["choices"][0]["message"]["content"]
-                return json.loads(self._clean_json_text(text))
+                parsed = json.loads(self._clean_json_text(text))
+                if isinstance(parsed, dict) and "description" in parsed:
+                    return parsed
             else:
                 logger.error(f"OpenAI API returned status {resp.status_code}: {resp.text}")
         except Exception as e:

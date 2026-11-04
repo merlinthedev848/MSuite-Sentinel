@@ -132,6 +132,20 @@ class DetectorNode:
         self._stream_cursor = 0
         self._motion_camera = ""
 
+    def _disconnect_mqtt(self):
+        """Cleanly terminate paho loop and socket to avoid leaking worker threads."""
+        client = self.mqtt_client
+        self.mqtt_client = None
+        if client is not None:
+            try:
+                client.loop_stop()
+            except Exception:
+                pass
+            try:
+                client.disconnect()
+            except Exception:
+                pass
+
     def _ensure_mqtt(self):
         if self.mqtt_client is not None:
             try:
@@ -139,6 +153,7 @@ class DetectorNode:
                     return
             except Exception:
                 pass
+            self._disconnect_mqtt()
         now = time.time()
         if now - self._last_mqtt_attempt < 10.0:
             return
@@ -155,6 +170,11 @@ class DetectorNode:
             self.mqtt_client = client
         except Exception as e:
             logger.error(f"Failed to connect to MQTT: {e}")
+            try:
+                client.loop_stop()
+                client.disconnect()
+            except Exception:
+                pass
             self.mqtt_client = None
 
     def run(self):
@@ -179,8 +199,9 @@ class DetectorNode:
             motion_gate.reset()
             self._motion_camera = target_camera_id
         logger.info(f"Connecting to camera [{target_camera_id}] stream: {target_url}")
-        cap = cv2.VideoCapture(target_url, cv2.CAP_FFMPEG)
+        cap = None
         try:
+            cap = cv2.VideoCapture(target_url, cv2.CAP_FFMPEG)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
             if not cap.isOpened():
                 logger.info(f"Stream {target_url} not available yet. Retrying in 10s...")
@@ -270,7 +291,11 @@ class DetectorNode:
                 if detections:
                     self.publish_event(detections, frame, frame_w, frame_h, target_camera_id)
         finally:
-            cap.release()
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
 
         logger.info("Stream connection lost or ended. Reconnecting in 5s...")
         time.sleep(5)
@@ -293,7 +318,7 @@ class DetectorNode:
             )
         except Exception as exc:
             logger.warning("Heartbeat publish failed: %s", exc)
-            self.mqtt_client = None
+            self._disconnect_mqtt()
 
     def publish_event(self, detections, frame, frame_w, frame_h, camera_id="default_cam"):
         self._ensure_mqtt()
@@ -340,7 +365,7 @@ class DetectorNode:
                     self.mqtt_client.publish(topic, json.dumps(payload, separators=(",", ":")), qos=1)
                 except Exception as again:
                     logger.warning(f"MQTT publish failed ({again}); resetting client.")
-                    self.mqtt_client = None
+                    self._disconnect_mqtt()
 
 
 if __name__ == "__main__":

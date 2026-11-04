@@ -93,6 +93,40 @@ async def get_edge_recordings(
     return {"segments": segments, "searched": True}
 
 
+def _find_candidate_recordings(cam_id: str) -> list[tuple[datetime, Path, float]]:
+    from api.services.recorder import _recording_roots, mp4_info_cached
+    candidate_files = []
+    seen = set()
+    for root in _recording_roots():
+        directory = root / cam_id
+        if not directory.is_dir():
+            continue
+        for p in directory.rglob("*.mp4"):
+            if p.name.startswith(".") or p.name in seen:
+                continue
+            try:
+                stat = p.stat()
+                if stat.st_size < 10240:
+                    continue
+                info = mp4_info_cached(str(p), stat)
+                if not info.finalized:
+                    continue
+            except OSError:
+                continue
+            match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", p.name)
+            if match:
+                y, mo, d, h, mi, s = map(int, match.groups())
+                try:
+                    file_start = datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
+                except ValueError:
+                    file_start = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                duration = info.duration_seconds or getattr(settings, "segment_seconds", 60)
+                candidate_files.append((file_start, p, duration))
+                seen.add(p.name)
+    candidate_files.sort(key=lambda x: x[0])
+    return candidate_files
+
+
 @router.post("/export")
 async def export_evidence(req: ExportRequest):
     """
@@ -110,37 +144,13 @@ async def export_evidence(req: ExportRequest):
         cam_id = safe_camera_id(req.camera_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid camera id")
-    from api.services.recorder import _recording_roots, inspect_mp4
+    from api.services.recorder import _terminate_process
 
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    candidate_files = []
-    seen = set()
-    for root in _recording_roots():
-        directory = root / cam_id
-        if not directory.is_dir():
-            continue
-        for p in directory.rglob("*.mp4"):
-            if p.name.startswith(".") or p.name in seen:
-                continue
-            try:
-                stat = p.stat()
-                info = inspect_mp4(p, stat.st_size)
-                if stat.st_size < 10240 or not info.finalized:
-                    continue
-            except OSError:
-                continue
-            match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", p.name)
-            if match:
-                y, mo, d, h, mi, s = map(int, match.groups())
-                file_start = datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
-                duration = info.duration_seconds or getattr(settings, "segment_seconds", 60)
-                candidate_files.append((file_start, p, duration))
-                seen.add(p.name)
+    candidate_files = await asyncio.to_thread(_find_candidate_recordings, cam_id)
 
     if not candidate_files:
         raise HTTPException(status_code=404, detail="No recorded video found for this camera")
-
-    candidate_files.sort(key=lambda x: x[0])
 
     matching = []
     for f_start, f_path, duration in candidate_files:
@@ -155,39 +165,53 @@ async def export_evidence(req: ExportRequest):
     out_filename = f"{export_id}.mp4"
     out_filepath = EXPORT_DIR / out_filename
 
-    # Execute ffmpeg stitch and slice
-    if len(matching) == 1:
-        single_input = matching[0]
-        cmd = [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-i", str(single_input),
-            "-c", "copy",
-            "-movflags", "+faststart",
-            str(out_filepath)
-        ]
-        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        await proc.communicate()
-    else:
-        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as concat_file:
-            for item in matching:
-                escaped_path = str(item.resolve()).replace("'", "'\\''")
-                concat_file.write(f"file '{escaped_path}'\n")
-            concat_path = concat_file.name
+    # Execute ffmpeg stitch and slice with timeout and cleanup
+    proc = None
+    concat_path = None
+    try:
+        if len(matching) == 1:
+            single_input = matching[0]
+            cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(single_input),
+                "-c", "copy",
+                "-movflags", "+faststart",
+                str(out_filepath)
+            ]
+        else:
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as concat_file:
+                for item in matching:
+                    escaped_path = str(item.resolve()).replace("'", "'\\''")
+                    concat_file.write(f"file '{escaped_path}'\n")
+                concat_path = concat_file.name
 
-        cmd = [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "concat", "-safe", "0",
-            "-i", concat_path,
-            "-c", "copy",
-            "-movflags", "+faststart",
-            str(out_filepath)
-        ]
-        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        await proc.communicate()
+            cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_path,
+                "-c", "copy",
+                "-movflags", "+faststart",
+                str(out_filepath)
+            ]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         try:
-            os.unlink(concat_path)
-        except OSError:
-            pass
+            await asyncio.wait_for(proc.communicate(), timeout=180.0)
+        except asyncio.TimeoutError:
+            await _terminate_process(proc)
+            raise HTTPException(status_code=504, detail="Incident export packaging timed out")
+    finally:
+        if proc is not None:
+            await _terminate_process(proc)
+        if concat_path:
+            try:
+                os.unlink(concat_path)
+            except OSError:
+                pass
 
     if not out_filepath.exists() or out_filepath.stat().st_size == 0:
         raise HTTPException(status_code=500, detail="Failed to synthesize incident video export package")

@@ -157,6 +157,14 @@ async def cached_camera_jpeg(
     cached = _JPEG_CACHE.get(camera_id)
     if cached and now - cached[0] < 2.0:
         return cached[1]
+    if len(_JPEG_CACHE) > 200:
+        stale_keys = [k for k, v in _JPEG_CACHE.items() if now - v[0] >= 30.0]
+        for k in stale_keys:
+            _JPEG_CACHE.pop(k, None)
+    if len(_LOCKS) > 200:
+        unlocked = [k for k, v in _LOCKS.items() if not v.locked()]
+        for k in unlocked:
+            _LOCKS.pop(k, None)
     lock = _LOCKS.setdefault(camera_id, asyncio.Lock())
     async with lock:
         cached = _JPEG_CACHE.get(camera_id)
