@@ -909,12 +909,12 @@ const Playback: React.FC = () => {
                   {isPlaying ? <Pause size={18} /> : <Play size={18} />}
                 </button>
                 
-                <span style={{ fontSize: '0.8rem', color: '#fff', marginRight: 'auto', marginLeft: 12, fontWeight: 500 }}>
+                <span className="playback-player-title" style={{ fontSize: '0.8rem', color: '#fff', marginRight: 'auto', marginLeft: 12, fontWeight: 500 }}>
                   Main Video Player
                 </span>
 
                 <div className="playback-pills">
-                  <div className="playback-pill">Time</div>
+                  <div className="playback-pill" style={{ fontFamily: 'monospace' }}>{formatTimeHMS(currentTimeMs)}</div>
                   <div className="playback-pill">{selectedCam?.name}</div>
                   <div className="playback-pill">{selectedCam?.resolution || '1080p'}</div>
 

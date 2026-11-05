@@ -1425,6 +1425,10 @@ body {
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
+
+  .playback-player-title {
+    display: none !important;
+  }
 }
 
 @media (max-width: 768px) {
