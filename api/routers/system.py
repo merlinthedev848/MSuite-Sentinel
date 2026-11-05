@@ -10,8 +10,11 @@ import sys
 import yaml
 import json
 import urllib.request
+import logging
 from pathlib import Path
 from api.config import settings
+
+log = logging.getLogger("sentinel.system")
 from api.services.local_core import local_core, sse_pack
 from api.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession

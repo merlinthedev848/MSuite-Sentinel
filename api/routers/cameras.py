@@ -1,12 +1,13 @@
 import asyncio
+import logging
+from typing import List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import List
 
 from api.config import settings
 from api.database import get_db, async_session_maker
@@ -16,6 +17,8 @@ from api.services.onvif_service import onvif_service
 from api.services.recorder import recorder_manager
 from api.services.local_core import local_core
 from api.security import can_view_secrets, is_masked_rtsp, is_masked_secret, mask_rtsp_url, mask_secret
+
+log = logging.getLogger("sentinel.cameras")
 
 router = APIRouter(prefix="/cameras", tags=["Cameras"])
 
