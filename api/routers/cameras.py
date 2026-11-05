@@ -165,7 +165,7 @@ async def ensure_stream(camera_id: str, quality: str = "auto", db: AsyncSession 
 
 
 @router.get("/{camera_id}/snapshot")
-async def get_camera_snapshot(camera_id: str, db: AsyncSession = Depends(get_db)):
+async def get_camera_snapshot(camera_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam:
@@ -183,13 +183,21 @@ async def get_camera_snapshot(camera_id: str, db: AsyncSession = Depends(get_db)
     if jpeg:
         return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
-    # Already-open go2rtc stream. One name only: trying every alias stacks timeouts.
+    # Already-open go2rtc stream using pooled HTTP client.
     try:
-        async with httpx.AsyncClient(timeout=1.2) as client:
+        client = getattr(request.app.state, "http_client", None)
+        if client is not None:
             resp = await client.get(
                 f"{settings.go2rtc_url.rstrip('/')}/api/frame.jpeg",
                 params={"src": camera_id},
+                timeout=1.5,
             )
+        else:
+            async with httpx.AsyncClient(timeout=1.5) as client_fallback:
+                resp = await client_fallback.get(
+                    f"{settings.go2rtc_url.rstrip('/')}/api/frame.jpeg",
+                    params={"src": camera_id},
+                )
         if resp.status_code == 200 and resp.content.startswith(b"\xff\xd8") and len(resp.content) > 32:
             return Response(content=resp.content, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
     except Exception:

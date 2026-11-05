@@ -108,8 +108,13 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
     let socket: WebSocket | null = null;
     let objectUrl = '';
     let media: MediaSource | null = null;
+    let removeVisibilityListener: (() => void) | null = null;
 
     const closeMedia = () => {
+      if (removeVisibilityListener) {
+        removeVisibilityListener();
+        removeVisibilityListener = null;
+      }
       if (socket) {
         socket.onopen = null;
         socket.onmessage = null;
@@ -323,9 +328,15 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
         }
       };
       document.addEventListener('visibilitychange', handleVisibilityChange);
+      removeVisibilityListener = () => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      };
 
       ws.onclose = () => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        if (removeVisibilityListener) {
+          removeVisibilityListener();
+          removeVisibilityListener = null;
+        }
         window.clearTimeout(idle);
         if (active) scheduleReconnect(sawFrame ? 500 : 1500);
       };

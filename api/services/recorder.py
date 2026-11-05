@@ -690,6 +690,12 @@ def _iter_camera_mp4s(cam_dir: Path):
 def _scan_recordings(camera_id: str | None = None) -> list[dict]:
     """Return recording files from every configured root with zero-I/O metadata cache."""
     global _RECORDING_ENTRY_CACHE
+    if camera_id:
+        from api.security import safe_camera_id
+        try:
+            camera_id = safe_camera_id(camera_id)
+        except ValueError:
+            return []
     results = []
     bases = [base for base in _recording_roots() if base.exists()]
     if not bases:
@@ -970,5 +976,6 @@ def purge_old_recordings(retention_days: int):
                     logger.error(f"Error purging file {f}: {e}")
                 
     if purged_count > 0:
+        _LIST_CACHE.clear()
         logger.info(f"Auto-purge complete. Deleted {purged_count} files ({round(purged_bytes / 1_048_576, 1)} MB)")
 
