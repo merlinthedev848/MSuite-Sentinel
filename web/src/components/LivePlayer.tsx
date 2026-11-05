@@ -110,7 +110,13 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
     let media: MediaSource | null = null;
     let removeVisibilityListener: (() => void) | null = null;
 
+    let edgeGuardTimer = 0;
+
     const closeMedia = () => {
+      if (edgeGuardTimer) {
+        window.clearInterval(edgeGuardTimer);
+        edgeGuardTimer = 0;
+      }
       if (removeVisibilityListener) {
         removeVisibilityListener();
         removeVisibilityListener = null;
@@ -276,9 +282,10 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
                 const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
                 const start = sourceBuffer.buffered.start(0);
                 const videoEl = localVideo.current;
-                if (end - start > 6 && !sourceBuffer.updating && videoEl) {
-                  const trimTo = Math.min(end - 1, Math.max(start, videoEl.currentTime - 1.5));
-                  if (trimTo - start > 0.5) {
+                // Keep media buffer lean to prevent decoder presentation lag
+                if (end - start > 3.0 && !sourceBuffer.updating && videoEl) {
+                  const trimTo = Math.min(end - 0.5, Math.max(start, videoEl.currentTime - 0.5));
+                  if (trimTo - start > 0.3) {
                     sourceBuffer.remove(start, trimTo);
                     return;
                   }
@@ -288,15 +295,20 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
                   window.clearTimeout(idle);
                   setMode('mse');
                   const lag = end - videoEl.currentTime;
-                  if (lag > 1.2 || videoEl.currentTime < end - 1.2) {
-                    videoEl.currentTime = Math.max(0, end - 0.15);
-                  } else if (lag > 0.5) {
-                    videoEl.playbackRate = 1.15;
-                  } else {
+
+                  // Sub-second ultra-low latency live edge lock (50ms - 200ms target latency)
+                  if (lag > 0.35 || videoEl.currentTime < end - 0.35) {
+                    videoEl.currentTime = Math.max(0, end - 0.08);
+                    videoEl.playbackRate = 1.0;
+                  } else if (lag > 0.16) {
+                    videoEl.playbackRate = 1.08;
+                  } else if (lag < 0.05) {
                     videoEl.playbackRate = 1.0;
                   }
                   videoEl.muted = muted;
-                  videoEl.play().catch(() => {});
+                  if (videoEl.paused) {
+                    videoEl.play().catch(() => {});
+                  }
                 }
               } catch {
                 /* a trim error is not a reason to drop back to stills */
@@ -313,6 +325,37 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
         pump();
       };
 
+      const jumpToLiveEdge = () => {
+        const videoEl = localVideo.current;
+        if (!videoEl || !sourceBuffer || !sourceBuffer.buffered.length) return;
+        try {
+          const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+          const lag = end - videoEl.currentTime;
+          if (lag > 0.2) {
+            videoEl.currentTime = Math.max(0, end - 0.08);
+            videoEl.playbackRate = 1.0;
+          }
+        } catch {}
+      };
+
+      video.addEventListener('loadeddata', jumpToLiveEdge, { once: true });
+      video.addEventListener('canplay', jumpToLiveEdge, { once: true });
+
+      // Continuous edge-guard interval to instantly recover from frame drops or clock drift
+      edgeGuardTimer = window.setInterval(() => {
+        if (!active) return;
+        const videoEl = localVideo.current;
+        if (!videoEl || videoEl.paused || !sourceBuffer || !sourceBuffer.buffered.length) return;
+        try {
+          const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+          const lag = end - videoEl.currentTime;
+          if (lag > 0.4) {
+            videoEl.currentTime = Math.max(0, end - 0.08);
+            videoEl.playbackRate = 1.0;
+          }
+        } catch {}
+      }, 600);
+
       const handleVisibilityChange = () => {
         if (!active) return;
         if (document.visibilityState === 'visible') {
@@ -320,7 +363,7 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
           if (videoEl && sourceBuffer && sourceBuffer.buffered.length) {
             try {
               const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
-              videoEl.currentTime = Math.max(0, end - 0.15);
+              videoEl.currentTime = Math.max(0, end - 0.08);
               videoEl.playbackRate = 1.0;
               videoEl.play().catch(() => {});
             } catch {}
