@@ -106,7 +106,8 @@ def fetch_active_streams() -> list[tuple[str, str]]:
                     cid = cam.get("id")
                     has_stream = bool(cam.get("rtsp_url_main") or cam.get("rtsp_url_sub"))
                     if cid and has_stream and cam.get("enabled", True):
-                        streams.append((cid, f"rtsp://127.0.0.1:8554/{cid}"))
+                        stream_target = f"{cid}_sub" if cam.get("rtsp_url_sub") else cid
+                        streams.append((cid, f"rtsp://127.0.0.1:8554/{stream_target}"))
                 return streams
     except Exception as exc:
         logger.warning("Camera discovery failed: %s", exc)
@@ -196,7 +197,6 @@ class DetectorNode:
             return
 
         if target_camera_id != self._motion_camera:
-            motion_gate.reset()
             self._motion_camera = target_camera_id
         logger.info(f"Connecting to camera [{target_camera_id}] stream: {target_url}")
         cap = None
@@ -235,7 +235,7 @@ class DetectorNode:
                     break
 
                 # Motion gating pre-filter to skip idle frames without running heavy neural networks
-                if ENABLE_MOTION_GATING and not motion_gate.has_motion(frame):
+                if ENABLE_MOTION_GATING and not motion_gate.has_motion(frame, camera_id=target_camera_id):
                     continue
 
                 frame_h, frame_w = frame.shape[:2]

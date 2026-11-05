@@ -36,6 +36,8 @@ class CameraRecorder:
         self.last_started_at: datetime | None = None
         self.last_error: str | None = None
         self.restart_count = 0
+        self._cached_has_audio: bool | None = None
+        self._has_audio_cached_at: float = 0.0
 
     def start(self):
         self._stop = False
@@ -91,39 +93,48 @@ class CameraRecorder:
         # Output pattern: 2024-01-15_14-00-00.mp4
         output_pattern = str(output_dir / "%Y-%m-%d_%H-%M-%S.mp4")
 
-        # Probe the stream dynamically to detect valid audio
+        # Probe the stream dynamically to detect valid audio (cached for 1 hour to avoid process thrashing)
+        loop = asyncio.get_running_loop()
+        now_ts = loop.time()
         has_audio = False
-        probe_proc = None
-        try:
-            probe_cmd = [
-                "ffprobe",
-                "-v", "error",
-                "-rtsp_transport", "tcp",
-                "-timeout", "8000000",
-                "-show_entries", "stream=codec_type,codec_name",
-                "-of", "json",
-                self.rtsp_url
-            ]
-            probe_proc = await asyncio.create_subprocess_exec(
-                *probe_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(probe_proc.communicate(), timeout=8.0)
-            if probe_proc.returncode == 0:
-                import json
-                data = json.loads(stdout.decode() or "{}")
-                for stream in data.get("streams", []):
-                    if stream.get("codec_type") == "audio":
-                        codec = stream.get("codec_name")
-                        if codec and codec != "none":
-                            has_audio = True
-                            logger.info(f"[{self.camera_name}] Detected audio stream with codec: {codec}")
-        except Exception as e:
-            logger.warning(f"[{self.camera_name}] ffprobe stream analysis timed out or failed: {e}. Defaulting to video-only.")
-        finally:
-            if probe_proc is not None:
-                await _terminate_process(probe_proc)
+        if self._cached_has_audio is not None and (now_ts - self._has_audio_cached_at < 3600.0):
+            has_audio = self._cached_has_audio
+        else:
+            probe_proc = None
+            try:
+                probe_cmd = [
+                    "ffprobe",
+                    "-v", "error",
+                    "-rtsp_transport", "tcp",
+                    "-timeout", "8000000",
+                    "-show_entries", "stream=codec_type,codec_name",
+                    "-of", "json",
+                    self.rtsp_url
+                ]
+                probe_proc = await asyncio.create_subprocess_exec(
+                    *probe_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(probe_proc.communicate(), timeout=8.0)
+                if probe_proc.returncode == 0:
+                    import json
+                    data = json.loads(stdout.decode() or "{}")
+                    for stream in data.get("streams", []):
+                        if stream.get("codec_type") == "audio":
+                            codec = stream.get("codec_name")
+                            if codec and codec != "none":
+                                has_audio = True
+                                logger.info(f"[{self.camera_name}] Detected audio stream with codec: {codec}")
+                self._cached_has_audio = has_audio
+                self._has_audio_cached_at = now_ts
+            except Exception as e:
+                logger.warning(f"[{self.camera_name}] ffprobe stream analysis timed out or failed: {e}. Defaulting to video-only.")
+                self._cached_has_audio = False
+                self._has_audio_cached_at = now_ts - 3540.0
+            finally:
+                if probe_proc is not None:
+                    await _terminate_process(probe_proc)
 
         cmd = [
             "ffmpeg",
@@ -225,21 +236,26 @@ async def _terminate_process(proc: "asyncio.subprocess.Process", grace: float = 
 _STREAM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$")
 
 
-def browser_stream_sources(name: str, rtsp_url: str) -> list[str]:
+def browser_stream_sources(name: str, rtsp_url: str, audio_source_url: str | None = None) -> list[str]:
     """RTSP copy, plus an H.264 track and AAC audio transcoding track for the browser."""
     sources = [rtsp_url]
+    if audio_source_url and audio_source_url != rtsp_url:
+        sources.append(f"{audio_source_url}#video=none")
     if name and _STREAM_NAME.fullmatch(name):
         sources.append(f"ffmpeg:{name}#video=h264")
         sources.append(f"ffmpeg:{name}#audio=aac")
     return sources
 
 
-async def register_go2rtc_stream(name: str, rtsp_url: str, attempts: int = 5, timeout: float = 3.0) -> bool:
+async def register_go2rtc_stream(name: str, rtsp_url: str, attempts: int = 5, timeout: float = 3.0, audio_source_url: str | None = None) -> bool:
     url = settings.go2rtc_url.rstrip('/')
     if rtsp_url.lower().startswith("rtsp://") and "transport=" not in rtsp_url and "#" not in rtsp_url:
         sep = "&" if "?" in rtsp_url else "?"
         rtsp_url = f"{rtsp_url}{sep}transport=tcp"
-    sources = browser_stream_sources(name, rtsp_url)
+    if audio_source_url and audio_source_url.lower().startswith("rtsp://") and "transport=" not in audio_source_url and "#" not in audio_source_url:
+        sep = "&" if "?" in audio_source_url else "?"
+        audio_source_url = f"{audio_source_url}{sep}transport=tcp"
+    sources = browser_stream_sources(name, rtsp_url, audio_source_url=audio_source_url)
     params = [("name", name)] + [("src", source) for source in sources]
     for attempt in range(1, max(1, attempts) + 1):
         try:
@@ -314,10 +330,12 @@ class RecorderManager:
                     await local_core.publish("recorder_started", {"camera_id": cam.id, "camera_name": cam.name})
                     logger.info(f"Started recorder for [{cam.name}] → {mask_rtsp_url(record_url)}")
                     live_url = cam.rtsp_url_sub or cam.rtsp_url_main
-                    asyncio.create_task(register_go2rtc_stream(cam.id, live_url))
-                    asyncio.create_task(register_go2rtc_stream(f"{cam.id}_main", cam.rtsp_url_main))
+                    audio_url = cam.rtsp_url_main or cam.rtsp_url_sub
+                    asyncio.create_task(register_go2rtc_stream(cam.id, live_url, audio_source_url=audio_url))
+                    if cam.rtsp_url_main:
+                        asyncio.create_task(register_go2rtc_stream(f"{cam.id}_main", cam.rtsp_url_main))
                     if cam.rtsp_url_sub:
-                        asyncio.create_task(register_go2rtc_stream(f"{cam.id}_sub", cam.rtsp_url_sub))
+                        asyncio.create_task(register_go2rtc_stream(f"{cam.id}_sub", cam.rtsp_url_sub, audio_source_url=audio_url))
                 else:
                     existing = self._recorders[cam.id]
                     if existing.rtsp_url != record_url or existing.camera_name != cam.name:
@@ -328,10 +346,12 @@ class RecorderManager:
                         rec.start()
                         await local_core.publish("recorder_updated", {"camera_id": cam.id, "camera_name": cam.name})
                         live_url = cam.rtsp_url_sub or cam.rtsp_url_main
-                        asyncio.create_task(register_go2rtc_stream(cam.id, live_url))
-                        asyncio.create_task(register_go2rtc_stream(f"{cam.id}_main", cam.rtsp_url_main))
+                        audio_url = cam.rtsp_url_main or cam.rtsp_url_sub
+                        asyncio.create_task(register_go2rtc_stream(cam.id, live_url, audio_source_url=audio_url))
+                        if cam.rtsp_url_main:
+                            asyncio.create_task(register_go2rtc_stream(f"{cam.id}_main", cam.rtsp_url_main))
                         if cam.rtsp_url_sub:
-                            asyncio.create_task(register_go2rtc_stream(f"{cam.id}_sub", cam.rtsp_url_sub))
+                            asyncio.create_task(register_go2rtc_stream(f"{cam.id}_sub", cam.rtsp_url_sub, audio_source_url=audio_url))
 
     def stop_all(self):
         for rec in self._recorders.values():

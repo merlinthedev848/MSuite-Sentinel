@@ -155,9 +155,11 @@ async def ensure_stream(camera_id: str, quality: str = "auto", db: AsyncSession 
     # spend the next several seconds bringing up another RTSP session.
     if quality == "main" and cam.rtsp_url_main:
         src, stream_url = f"{cam.id}_main", cam.rtsp_url_main
+        audio_url = cam.rtsp_url_main
     else:
         src, stream_url = cam.id, (cam.rtsp_url_sub or cam.rtsp_url_main)
-    registered = await register_go2rtc_stream(src, stream_url, attempts=1, timeout=1.5)
+        audio_url = cam.rtsp_url_main or cam.rtsp_url_sub
+    registered = await register_go2rtc_stream(src, stream_url, attempts=1, timeout=1.5, audio_source_url=audio_url)
     asyncio.create_task(request_keyframe(stream_url, cam.onvif_username, cam.onvif_password))
     return {"src": src, "streams": [src], "registered": bool(registered)}
 

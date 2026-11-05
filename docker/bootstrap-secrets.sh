@@ -31,6 +31,9 @@ webrtc:
 rtsp:
   listen: "127.0.0.1:8554"
 
+ffmpeg:
+  bin: "ffmpeg"
+
 streams: {}
 EOF
 chmod 600 "$DIR"/* || true

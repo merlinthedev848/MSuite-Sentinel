@@ -83,6 +83,7 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
     const video = localVideo.current;
     if (video) {
       video.muted = muted;
+      video.defaultMuted = muted;
       if (!muted) {
         video.volume = 1.0;
         video.play().catch(() => {});
@@ -270,8 +271,8 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
                 const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
                 const start = sourceBuffer.buffered.start(0);
                 const videoEl = localVideo.current;
-                if (end - start > 8 && !sourceBuffer.updating && videoEl) {
-                  const trimTo = Math.min(end - 1, Math.max(start, videoEl.currentTime - 2));
+                if (end - start > 6 && !sourceBuffer.updating && videoEl) {
+                  const trimTo = Math.min(end - 1, Math.max(start, videoEl.currentTime - 1.5));
                   if (trimTo - start > 0.5) {
                     sourceBuffer.remove(start, trimTo);
                     return;
@@ -282,8 +283,14 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
                   window.clearTimeout(idle);
                   setMode('mse');
                   const lag = end - videoEl.currentTime;
-                  if (videoEl.currentTime < end - 6) videoEl.currentTime = Math.max(0, end - 0.4);
-                  videoEl.playbackRate = lag > 1.2 ? 1.08 : 1;
+                  if (lag > 1.2 || videoEl.currentTime < end - 1.2) {
+                    videoEl.currentTime = Math.max(0, end - 0.15);
+                  } else if (lag > 0.5) {
+                    videoEl.playbackRate = 1.15;
+                  } else {
+                    videoEl.playbackRate = 1.0;
+                  }
+                  videoEl.muted = muted;
                   videoEl.play().catch(() => {});
                 }
               } catch {
@@ -301,7 +308,24 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
         pump();
       };
 
+      const handleVisibilityChange = () => {
+        if (!active) return;
+        if (document.visibilityState === 'visible') {
+          const videoEl = localVideo.current;
+          if (videoEl && sourceBuffer && sourceBuffer.buffered.length) {
+            try {
+              const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+              videoEl.currentTime = Math.max(0, end - 0.15);
+              videoEl.playbackRate = 1.0;
+              videoEl.play().catch(() => {});
+            } catch {}
+          }
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+
       ws.onclose = () => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
         window.clearTimeout(idle);
         if (active) scheduleReconnect(sawFrame ? 500 : 1500);
       };
