@@ -22,6 +22,7 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
   const [activeFilter, setActiveFilter] = useState<'all' | 'person' | 'vehicle' | 'motion'>('all');
   const [refreshing, setRefreshing] = useState(false);
   const [exportingEventId, setExportingEventId] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(30);
 
   const handleExportEvent = async (e: React.MouseEvent, ev: any) => {
     e.stopPropagation();
@@ -74,7 +75,7 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
 
   const loadEvents = async () => {
     try {
-      const res = await fetch(apiUrl('/events?limit=150'));
+      const res = await fetch(apiUrl('/events?limit=300'));
       if (res.ok) {
         setEvents(await res.json());
       }
@@ -115,6 +116,12 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
       return true;
     });
   }, [events, activeFilter, searchQuery, cameraMap]);
+
+  const displayedEvents = React.useMemo(() => {
+    return filteredEvents.slice(0, visibleCount);
+  }, [filteredEvents, visibleCount]);
+
+  const hasMore = visibleCount < filteredEvents.length;
 
   const formatEventTime = (isoString: string) => {
     if (!isoString) return '';
@@ -207,8 +214,8 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
           </div>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {filteredEvents.map((ev: any, idx) => {
+        <div className="mobile-events-scroll-list">
+          {displayedEvents.map((ev: any, idx) => {
             const camName = cameraMap[ev.camera_id] || `Camera ${ev.camera_id || ''}`;
             const cls = (ev.object_class || 'motion').toLowerCase();
             const badgeClass = cls === 'person' 
@@ -324,6 +331,29 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
               </div>
             );
           })}
+
+          {hasMore && (
+            <button
+              onClick={() => setVisibleCount(c => c + 30)}
+              className="mobile-ctrl-btn"
+              style={{
+                margin: '12px auto 0',
+                padding: '8px 18px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                color: 'var(--mobile-accent)',
+                borderColor: 'rgba(0, 210, 255, 0.3)',
+                fontSize: '0.75rem',
+                cursor: 'pointer'
+              }}
+            >
+              Load Older Notifications ({filteredEvents.length - displayedEvents.length} more)
+            </button>
+          )}
+
+          {/* Bottom clearance spacer */}
+          <div style={{ height: 48 }} />
         </div>
       )}
     </div>

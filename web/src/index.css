@@ -1785,3 +1785,19 @@ body {
     margin: 0 auto;
   }
 }
+
+/* ── Global No-Scrollbar Utility ── */
+.no-scrollbar,
+.mobile-content,
+.mobile-events-scroll-list,
+.mobile-notifications-ticker {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.no-scrollbar::-webkit-scrollbar,
+.mobile-content::-webkit-scrollbar,
+.mobile-events-scroll-list::-webkit-scrollbar,
+.mobile-notifications-ticker::-webkit-scrollbar {
+  display: none !important;
+}

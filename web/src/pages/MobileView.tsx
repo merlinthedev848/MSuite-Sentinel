@@ -32,6 +32,7 @@ export const MobileView: React.FC<MobileViewProps> = ({ onLogout }) => {
   const [selectedTime, setSelectedTime] = useState<string | undefined>(initialTimeParam);
 
   const [cameras, setCameras] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
   const [audioEnabled, setAudioEnabled] = useState(() => audioAlerts.isEnabled());
   const [showAIDrawer, setShowAIDrawer] = useState(false);
   const [showPreviewBanner, setShowPreviewBanner] = useState(() => !isMobileDevice());
@@ -69,8 +70,19 @@ export const MobileView: React.FC<MobileViewProps> = ({ onLogout }) => {
     } catch {}
   };
 
+  const loadEvents = async () => {
+    try {
+      const res = await fetch(apiUrl('/events?limit=25'));
+      if (res.ok) {
+        const data = await res.json();
+        setEvents(Array.isArray(data) ? data : []);
+      }
+    } catch {}
+  };
+
   useEffect(() => {
     loadCameras();
+    loadEvents();
 
     let eventsSource: EventSource | null = null;
     let reconnectTimeout: number | undefined;
@@ -90,6 +102,7 @@ export const MobileView: React.FC<MobileViewProps> = ({ onLogout }) => {
                 audioAlerts.playChime(ev.data?.threat_level === 'HIGH' ? 'threat' : 'info');
               }
               loadCameras();
+              loadEvents();
             } else if (ev.type === 'camera_status') {
               loadCameras();
             }
@@ -122,9 +135,9 @@ export const MobileView: React.FC<MobileViewProps> = ({ onLogout }) => {
     };
   }, []);
 
-  const handleSelectCameraForPlayback = (cameraId: string) => {
+  const handleSelectCameraForPlayback = (cameraId: string, time?: string) => {
     setSelectedCameraId(cameraId);
-    setSelectedTime(undefined);
+    setSelectedTime(time);
     changeTab('playback');
   };
 
@@ -268,8 +281,10 @@ export const MobileView: React.FC<MobileViewProps> = ({ onLogout }) => {
         {activeTab === 'live' && (
           <MobileLive
             cameras={cameras}
+            events={events}
             onSelectCameraForPlayback={handleSelectCameraForPlayback}
             onRefresh={loadCameras}
+            onViewAllEvents={() => changeTab('events')}
           />
         )}
 

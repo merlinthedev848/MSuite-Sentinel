@@ -23,12 +23,14 @@
 .mobile-app {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
   background-color: var(--mobile-bg);
   color: var(--mobile-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  overflow-x: hidden;
+  overflow: hidden;
   position: relative;
   box-sizing: border-box;
 }
@@ -37,8 +39,9 @@
 .mobile-header {
   position: sticky;
   top: 0;
+  flex-shrink: 0;
   z-index: 50;
-  background: rgba(18, 21, 27, 0.92);
+  background: rgba(18, 21, 27, 0.94);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--mobile-border);
@@ -132,13 +135,20 @@
 /* ── Mobile Main Content Container ────────────────────────────────── */
 .mobile-content {
   flex: 1;
-  padding: 12px 14px calc(72px + var(--safe-bottom));
+  min-height: 0;
+  padding: 12px 14px calc(96px + var(--safe-bottom));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   max-width: 600px;
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.mobile-content::-webkit-scrollbar {
+  display: none;
 }
 
 /* ── Mobile Bottom Navigation Bar ─────────────────────────────────── */
@@ -148,17 +158,71 @@
   left: 0;
   right: 0;
   z-index: 60;
-  background: rgba(18, 21, 27, 0.94);
+  background: rgba(18, 21, 27, 0.96);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid var(--mobile-border);
   display: flex;
   align-items: center;
   justify-content: space-around;
-  padding-top: 6px;
-  padding-bottom: max(var(--safe-bottom), 8px);
+  padding-top: 8px;
+  padding-bottom: max(var(--safe-bottom), 12px);
   max-width: 600px;
   margin: 0 auto;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.45);
+}
+
+/* ── Mobile Notifications Scroll Ticker ───────────────────────────── */
+.mobile-notifications-ticker {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px 2px 8px 2px;
+}
+
+.mobile-notifications-ticker::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-notification-chip {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--mobile-surface);
+  border: 1px solid var(--mobile-border);
+  border-radius: 20px;
+  padding: 6px 12px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 0.1s, border-color 0.15s, background-color 0.15s;
+}
+
+.mobile-notification-chip:active {
+  transform: scale(0.96);
+  border-color: var(--mobile-accent);
+  background-color: var(--mobile-surface-hover);
+}
+
+/* ── Mobile Notifications Scroll List ─────────────────────────────── */
+.mobile-events-scroll-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 30px;
+}
+
+.mobile-events-scroll-list::-webkit-scrollbar {
+  display: none;
 }
 
 .mobile-nav-item {

@@ -795,6 +795,9 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
         </div>
       )}
 
+      {/* Clearance spacer to prevent content clipping behind bottom navigation bar */}
+      <div style={{ height: 48 }} />
+
       {/* ── 5. Video File Export Modal ── */}
       {showExportModal && (
         <div className="mobile-modal-overlay" onClick={() => setShowExportModal(false)}>

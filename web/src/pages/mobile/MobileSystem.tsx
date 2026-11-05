@@ -296,6 +296,9 @@ export const MobileSystem: React.FC<MobileSystemProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Clearance spacer to prevent content clipping behind bottom navigation bar */}
+      <div style={{ height: 48 }} />
     </div>
   );
 };

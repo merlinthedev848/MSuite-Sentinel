@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Camera, Volume2, VolumeX, PlaySquare, RefreshCw, Download, Search, Maximize2, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Camera, Volume2, VolumeX, PlaySquare, RefreshCw, Download, Search, Maximize2, X, ChevronLeft, ChevronRight, Bell } from 'lucide-react';
 import LivePlayer from '../../components/LivePlayer';
 import { apiUrl } from '../../lib/endpoints';
 
@@ -15,14 +15,18 @@ interface CameraItem {
 
 interface MobileLiveProps {
   cameras: CameraItem[];
-  onSelectCameraForPlayback: (cameraId: string) => void;
+  events?: any[];
+  onSelectCameraForPlayback: (cameraId: string, time?: string) => void;
   onRefresh: () => void;
+  onViewAllEvents?: () => void;
 }
 
 export const MobileLive: React.FC<MobileLiveProps> = ({
   cameras,
+  events = [],
   onSelectCameraForPlayback,
   onRefresh,
+  onViewAllEvents,
 }) => {
   const [mutedStates, setMutedStates] = useState<Record<string, boolean>>({});
   const [qualities, setQualities] = useState<Record<string, 'auto' | 'main' | 'sub'>>({});
@@ -197,6 +201,46 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
         </div>
       )}
 
+      {/* ── Scrollable Recent Notifications Ticker ── */}
+      {events && events.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, padding: '0 2px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', color: 'var(--mobile-text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              <Bell size={12} color="var(--mobile-accent)" />
+              Recent Notifications
+            </div>
+            {onViewAllEvents && (
+              <button 
+                onClick={onViewAllEvents} 
+                style={{ background: 'transparent', border: 'none', color: 'var(--mobile-accent)', fontSize: '0.72rem', cursor: 'pointer', padding: 0, fontWeight: 500 }}
+              >
+                All Events &rarr;
+              </button>
+            )}
+          </div>
+          <div className="mobile-notifications-ticker">
+            {events.slice(0, 15).map((ev: any, idx) => {
+              const cls = (ev.object_class || 'motion').toLowerCase();
+              const camName = cameras.find(c => c.id === ev.camera_id)?.name || 'Camera';
+              const timeStr = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+              return (
+                <div
+                  key={ev.id || idx}
+                  className="mobile-notification-chip"
+                  onClick={() => onSelectCameraForPlayback(ev.camera_id, ev.timestamp)}
+                  title="Jump to incident footage"
+                >
+                  <span className={`mobile-dot ${cls === 'person' ? 'person' : cls === 'vehicle' ? 'vehicle' : 'online'}`} />
+                  <span style={{ fontWeight: 600, color: 'var(--mobile-text)' }}>{camName}</span>
+                  <span style={{ color: 'var(--mobile-text-muted)' }}>{ev.object_class?.split(/[:@]/)[0] || 'Motion'}</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: 'var(--mobile-accent)' }}>{timeStr}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* ── Camera Feeds List ── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontSize: '0.8rem', color: 'var(--mobile-text-muted)', fontWeight: 600 }}>
@@ -339,6 +383,9 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
           </div>
         );
       })}
+
+      {/* Clearance spacer to prevent any cards or buttons from clipping behind bottom nav bar */}
+      <div style={{ height: 48 }} />
     </div>
   );
 };
