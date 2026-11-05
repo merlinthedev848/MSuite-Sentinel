@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Activity,
   Camera as CamIcon,
@@ -6,7 +6,6 @@ import {
   Focus,
   Maximize2,
   Minimize2,
-  Video,
   WifiOff,
   Volume2,
   VolumeX,
@@ -15,6 +14,15 @@ import {
   ChevronRight,
   Play,
   Pause,
+  Trash2,
+  Plus,
+  Check,
+  Layers,
+  Sliders,
+  Sparkles,
+  Save,
+  Shield,
+  Info,
 } from 'lucide-react';
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiUrl } from '../lib/endpoints';
@@ -56,6 +64,26 @@ interface RecordingFile {
 
 type ViewMode = 'live' | 'playback' | 'analytics';
 
+interface ZonePoint {
+  x: number;
+  y: number;
+}
+
+export interface AnalyticsZone {
+  id: string;
+  name: string;
+  type: 'motion' | 'intrusion' | 'tripwire' | 'privacy';
+  x: number; // 0..100
+  y: number; // 0..100
+  w: number; // 5..100
+  h: number; // 5..100
+  min_confidence: number; // 0..1
+  enabled: boolean;
+  notify: boolean;
+  cooldown_seconds: number;
+  objects: string[];
+}
+
 const parseRecording = (r: any): RecordingFile => {
   let start = 0;
   if (r.created_at) {
@@ -69,12 +97,14 @@ const parseRecording = (r: any): RecordingFile => {
       start = Date.UTC(parseInt(y), parseInt(m) - 1, parseInt(d), parseInt(hr), parseInt(min), parseInt(sec));
     }
   }
-  const segmentMs = Math.max(1, Number(r.duration_seconds) || 60) * 1000;
+  const durSec = typeof r.duration_seconds === 'number' && r.duration_seconds > 0 ? r.duration_seconds : 60;
   return {
-    ...r,
+    camera_id: r.camera_id || '',
+    filename: r.filename || '',
+    url: r.url || '',
+    created_at: r.created_at || '',
     startTimestamp: start,
-    endTimestamp: start + segmentMs,
-    segmentMs,
+    endTimestamp: start + durSec * 1000,
   };
 };
 
@@ -91,6 +121,88 @@ const inputTime = (date: Date) => {
   return `${h}:${m}`;
 };
 
+const pointsToBox = (points: ZonePoint[]) => {
+  if (!points || points.length === 0) return { x: 15, y: 15, w: 30, h: 30 };
+  const xs = points.map(p => p.x);
+  const ys = points.map(p => p.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return {
+    x: Math.max(0, Math.min(95, Math.round(minX * 100))),
+    y: Math.max(0, Math.min(95, Math.round(minY * 100))),
+    w: Math.max(5, Math.min(100, Math.round((maxX - minX) * 100))),
+    h: Math.max(5, Math.min(100, Math.round((maxY - minY) * 100))),
+  };
+};
+
+const boxToPoints = (x: number, y: number, w: number, h: number): ZonePoint[] => {
+  const x1 = Math.max(0, Math.min(1, x / 100));
+  const y1 = Math.max(0, Math.min(1, y / 100));
+  const x2 = Math.max(0, Math.min(1, (x + w) / 100));
+  const y2 = Math.max(0, Math.min(1, (y + h) / 100));
+  return [
+    { x: x1, y: y1 },
+    { x: x2, y: y1 },
+    { x: x2, y: y2 },
+    { x: x1, y: y2 },
+  ];
+};
+
+const cameraToAnalyticsZones = (cam: Camera): AnalyticsZone[] => {
+  const rawZones = Array.isArray(cam.config?.zones) ? cam.config.zones : [];
+  if (rawZones.length === 0) {
+    return [
+      {
+        id: `zone-default-${cam.id}`,
+        name: 'Entry Zone',
+        type: 'motion',
+        x: 20,
+        y: 20,
+        w: 45,
+        h: 40,
+        min_confidence: 0.6,
+        enabled: true,
+        notify: true,
+        cooldown_seconds: 60,
+        objects: ['person', 'car'],
+      },
+    ];
+  }
+  return rawZones.map((z: any, idx: number) => {
+    let box = { x: 15 + (idx % 3) * 10, y: 15 + (idx % 3) * 10, w: 30, h: 30 };
+    if (typeof z.x === 'number' && typeof z.w === 'number') {
+      box = { x: z.x, y: z.y, w: z.w, h: z.h };
+    } else if (Array.isArray(z.points) && z.points.length > 0) {
+      box = pointsToBox(z.points);
+    }
+    return {
+      id: z.id || `zone-${cam.id}-${idx}`,
+      name: z.name || `Zone ${idx + 1}`,
+      type: (z.type as any) || (idx === 1 ? 'intrusion' : 'motion'),
+      x: box.x,
+      y: box.y,
+      w: box.w,
+      h: box.h,
+      min_confidence: typeof z.min_confidence === 'number' ? z.min_confidence : 0.6,
+      enabled: z.enabled !== false,
+      notify: z.notify !== false,
+      cooldown_seconds: z.cooldown_seconds || 60,
+      objects: Array.isArray(z.objects) && z.objects.length > 0 ? z.objects : ['person', 'car'],
+    };
+  });
+};
+
+const ZONE_COLORS: Record<string, { border: string; bg: string; label: string }> = {
+  motion: { border: '#00d2ff', bg: 'rgba(0, 210, 255, 0.14)', label: 'Motion' },
+  intrusion: { border: '#ff4757', bg: 'rgba(255, 71, 87, 0.16)', label: 'Intrusion' },
+  tripwire: { border: '#ffa502', bg: 'rgba(255, 165, 2, 0.14)', label: 'Tripwire' },
+  privacy: { border: '#9b59b6', bg: 'rgba(20, 24, 33, 0.92)', label: 'Privacy Mask' },
+};
+
+const AVAILABLE_OBJECTS = ['person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'animal'];
+
 const CameraFeedComponent = React.memo<{
   cam: Camera;
   analytics?: boolean;
@@ -105,7 +217,6 @@ const CameraFeedComponent = React.memo<{
   const hasStream = Boolean(cam.rtsp_url_main || cam.rtsp_url_sub);
   const quality: 'main' | 'sub' = cam.rtsp_url_sub && !maximized ? 'sub' : 'main';
 
-  // Tools states
   const [isMuted, setIsMuted] = useState(true);
   const [isZoomMode, setIsZoomMode] = useState(false);
   const [zoomScale, setZoomScale] = useState(1);
@@ -114,7 +225,6 @@ const CameraFeedComponent = React.memo<{
 
   const panStart = useRef({ x: 0, y: 0 });
 
-  // 1. Fullscreen
   const handleFullscreen = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isNativeFullscreenActive()) {
@@ -156,7 +266,6 @@ const CameraFeedComponent = React.memo<{
     }
   };
 
-  // Digital PTZ handlers
   const handleZoomWheel = (e: React.WheelEvent) => {
     if (!isZoomMode) return;
     e.preventDefault();
@@ -195,8 +304,13 @@ const CameraFeedComponent = React.memo<{
     cursor: isZoomMode ? (isPanning ? 'grabbing' : 'grab') : 'default',
   };
 
+  const activeZones = useMemo(() => {
+    if (!analytics) return [];
+    return cameraToAnalyticsZones(cam);
+  }, [analytics, cam]);
+
   return (
-    <div 
+    <div
       ref={containerRef}
       className={`cam-cell${cam.has_motion || analytics ? ' has-motion' : ''}${maximized ? ' is-maximized' : ''}`}
       onDoubleClick={onMaximize}
@@ -261,12 +375,48 @@ const CameraFeedComponent = React.memo<{
         </div>
       )}
 
-      {analytics && (
-        <>
-          <div style={{ position: 'absolute', left: '18%', top: '24%', width: '18%', height: '28%', border: '1px solid rgba(255,255,255,0.7)', zIndex: 8 }} />
-          <div style={{ position: 'absolute', left: '58%', top: '46%', width: '20%', height: '18%', border: '1px solid rgba(197,139,132,0.9)', zIndex: 8 }} />
-        </>
-      )}
+      {/* Real Configured Detection Zones Overlay */}
+      {analytics && activeZones.map((z, idx) => {
+        const theme = ZONE_COLORS[z.type] || ZONE_COLORS.motion;
+        return (
+          <div
+            key={z.id || idx}
+            style={{
+              position: 'absolute',
+              left: `${z.x}%`,
+              top: `${z.y}%`,
+              width: `${z.w}%`,
+              height: `${z.h}%`,
+              border: `1.5px solid ${theme.border}`,
+              background: theme.bg,
+              zIndex: 8,
+              pointerEvents: 'none',
+              borderRadius: 4,
+              boxShadow: `0 0 10px ${theme.border}40`,
+            }}
+          >
+            <span
+              style={{
+                position: 'absolute',
+                top: -18,
+                left: 0,
+                fontSize: '0.62rem',
+                background: 'rgba(15, 17, 21, 0.9)',
+                color: theme.border,
+                padding: '1px 6px',
+                borderRadius: 3,
+                whiteSpace: 'nowrap',
+                border: `1px solid ${theme.border}60`,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+            >
+              {z.name} <span style={{ opacity: 0.65 }}>({Math.round(z.min_confidence * 100)}%)</span>
+            </span>
+          </div>
+        );
+      })}
 
       {isZoomMode && (
         <div style={{
@@ -295,58 +445,53 @@ const CameraFeedComponent = React.memo<{
 
       <div className="cam-bottom" style={{ zIndex: 10 }}>
         {cam.onvif_endpoint && (
-          <button 
-            className="cam-btn" 
-            title="PTZ Controls" 
+          <button
+            className="cam-btn"
+            title="PTZ Controls"
             onClick={() => setShowPTZ(!showPTZ)}
             style={{ color: showPTZ ? 'var(--cyan)' : 'inherit' }}
           >
             <Crosshair size={12} />
           </button>
         )}
-        {/* Focus Mode (Digital Zoom) */}
-        <button 
-          className="cam-btn" 
-          onClick={toggleZoomMode} 
+        <button
+          className="cam-btn"
+          onClick={toggleZoomMode}
           style={{ color: isZoomMode ? 'var(--cyan)' : 'inherit' }}
           title="Digital Zoom / Focus"
         >
           <Focus size={12} />
         </button>
 
-        {/* Listen / Unmute */}
-        <button 
-          className="cam-btn" 
-          onClick={() => setIsMuted(!isMuted)} 
+        <button
+          className="cam-btn"
+          onClick={() => setIsMuted(!isMuted)}
           style={{ color: !isMuted ? 'var(--cyan)' : 'inherit' }}
           title={isMuted ? "Listen" : "Mute"}
         >
           {isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
         </button>
 
-        {/* Snapshot Capture */}
-        <button 
-          className="cam-btn" 
-          onClick={handleSnapshot} 
+        <button
+          className="cam-btn"
+          onClick={handleSnapshot}
           title="Take Snapshot"
         >
           <CamIcon size={12} />
         </button>
 
-        {/* Maximize / Restore Grid */}
-        <button 
-          className="cam-btn" 
-          onClick={(e) => { e.stopPropagation(); onMaximize?.(); }} 
+        <button
+          className="cam-btn"
+          onClick={(e) => { e.stopPropagation(); onMaximize?.(); }}
           title={maximized ? "Restore Grid" : "Full View (Double-click)"}
           style={{ color: maximized ? 'var(--cyan)' : 'inherit' }}
         >
           {maximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
         </button>
 
-        {/* Native Fullscreen Mode */}
-        <button 
-          className="cam-btn" 
-          onClick={handleFullscreen} 
+        <button
+          className="cam-btn"
+          onClick={handleFullscreen}
           title="Native Browser Fullscreen"
         >
           <ExternalLink size={12} />
@@ -387,13 +532,32 @@ const LiveView: React.FC = () => {
   const [syncWindowStart, setSyncWindowStart] = useState(Date.now() - 3 * 3600 * 1000);
   const syncVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
-  // (Clock moved to DigitalClock to prevent re-renders)
+  // Analytics Studio Interactive State
+  const [selectedAnalyticsCamId, setSelectedAnalyticsCamId] = useState<string | null>(null);
+  const [localZones, setLocalZones] = useState<Record<string, AnalyticsZone[]>>({});
+  const [activeZoneId, setActiveZoneId] = useState<string | null>(null);
+  const [savingZones, setSavingZones] = useState(false);
+  const [zoneToast, setZoneToast] = useState<{ message: string; ok: boolean } | null>(null);
+
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const dragState = useRef<{
+    zoneId: string;
+    action: 'move' | 'resize-se' | 'resize-sw' | 'resize-ne' | 'resize-nw';
+    startClientX: number;
+    startClientY: number;
+    rectWidth: number;
+    rectHeight: number;
+    origX: number;
+    origY: number;
+    origW: number;
+    origH: number;
+  } | null>(null);
 
   const fetchData = async () => {
     try {
       const c = await fetch(apiUrl('/cameras')).then(r => r.ok ? r.json() : []);
       setCameras(c);
-      const e = await fetch(apiUrl('/events?limit=20')).then(r => r.ok ? r.json() : []);
+      const e = await fetch(apiUrl('/events?limit=30')).then(r => r.ok ? r.json() : []);
       setEvents(e);
     } catch {
       /* keep the last good snapshot */
@@ -413,8 +577,27 @@ const LiveView: React.FC = () => {
     return () => clearInterval(t);
   }, []);
 
+  // Sync / initialize local zones when cameras are fetched
   useEffect(() => {
     if (cameras.length === 0) return;
+    setLocalZones(prev => {
+      const next = { ...prev };
+      cameras.forEach(cam => {
+        if (!next[cam.id]) {
+          next[cam.id] = cameraToAnalyticsZones(cam);
+        }
+      });
+      return next;
+    });
+
+    if (!selectedAnalyticsCamId && cameras[0]) {
+      setSelectedAnalyticsCamId(cameras[0].id);
+    }
+  }, [cameras, selectedAnalyticsCamId]);
+
+  // Lazy query recordings ONLY when user enters Playback view
+  useEffect(() => {
+    if (cameras.length === 0 || viewMode !== 'playback') return;
     (async () => {
       const next: Record<string, RecordingFile[]> = {};
       await Promise.all(cameras.map(async cam => {
@@ -427,7 +610,7 @@ const LiveView: React.FC = () => {
       }));
       setRecordings(next);
     })();
-  }, [cameras.map(c => c.id).join('|')]);
+  }, [cameras, viewMode]);
 
   useEffect(() => {
     if (!patrolMode || cameras.length === 0) return;
@@ -508,6 +691,7 @@ const LiveView: React.FC = () => {
     }
     return 'g4';
   }, [maximizedId, layout, visibleCameras.length]);
+
   const syncSpan = 6 * 3600 * 1000;
 
   const chartData = useMemo(() => {
@@ -550,7 +734,201 @@ const LiveView: React.FC = () => {
     seekSyncVideos(target);
   };
 
+  // Detection Zone Dragging & Resizing Logic
+  const handleStartDrag = (
+    e: React.PointerEvent,
+    zoneId: string,
+    action: 'move' | 'resize-se' | 'resize-sw' | 'resize-ne' | 'resize-nw'
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setActiveZoneId(zoneId);
+    const rect = canvasContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
 
+    const currentZone = (localZones[selectedAnalyticsCamId || ''] || []).find(z => z.id === zoneId);
+    if (!currentZone) return;
+
+    dragState.current = {
+      zoneId,
+      action,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      rectWidth: rect.width,
+      rectHeight: rect.height,
+      origX: currentZone.x,
+      origY: currentZone.y,
+      origW: currentZone.w,
+      origH: currentZone.h,
+    };
+  };
+
+  const handlePointerMove = useCallback((e: PointerEvent) => {
+    if (!dragState.current || !selectedAnalyticsCamId) return;
+    const { zoneId, action, startClientX, startClientY, rectWidth, rectHeight, origX, origY, origW, origH } = dragState.current;
+    if (rectWidth <= 0 || rectHeight <= 0) return;
+
+    const dX = ((e.clientX - startClientX) / rectWidth) * 100;
+    const dY = ((e.clientY - startClientY) / rectHeight) * 100;
+
+    setLocalZones(prev => {
+      const zones = prev[selectedAnalyticsCamId] || [];
+      return {
+        ...prev,
+        [selectedAnalyticsCamId]: zones.map(z => {
+          if (z.id !== zoneId) return z;
+          if (action === 'move') {
+            const nextX = Math.max(0, Math.min(100 - origW, Math.round(origX + dX)));
+            const nextY = Math.max(0, Math.min(100 - origH, Math.round(origY + dY)));
+            return { ...z, x: nextX, y: nextY };
+          }
+          if (action === 'resize-se') {
+            const nextW = Math.max(5, Math.min(100 - origX, Math.round(origW + dX)));
+            const nextH = Math.max(5, Math.min(100 - origY, Math.round(origH + dY)));
+            return { ...z, w: nextW, h: nextH };
+          }
+          if (action === 'resize-sw') {
+            const rightEdge = origX + origW;
+            const nextX = Math.max(0, Math.min(rightEdge - 5, Math.round(origX + dX)));
+            const nextW = rightEdge - nextX;
+            const nextH = Math.max(5, Math.min(100 - origY, Math.round(origH + dY)));
+            return { ...z, x: nextX, w: nextW, h: nextH };
+          }
+          if (action === 'resize-ne') {
+            const bottomEdge = origY + origH;
+            const nextY = Math.max(0, Math.min(bottomEdge - 5, Math.round(origY + dY)));
+            const nextH = bottomEdge - nextY;
+            const nextW = Math.max(5, Math.min(100 - origX, Math.round(origW + dX)));
+            return { ...z, y: nextY, h: nextH, w: nextW };
+          }
+          if (action === 'resize-nw') {
+            const rightEdge = origX + origW;
+            const bottomEdge = origY + origH;
+            const nextX = Math.max(0, Math.min(rightEdge - 5, Math.round(origX + dX)));
+            const nextY = Math.max(0, Math.min(bottomEdge - 5, Math.round(origY + dY)));
+            return { ...z, x: nextX, y: nextY, w: rightEdge - nextX, h: bottomEdge - nextY };
+          }
+          return z;
+        }),
+      };
+    });
+  }, [selectedAnalyticsCamId]);
+
+  const handlePointerUp = useCallback(() => {
+    dragState.current = null;
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [handlePointerMove, handlePointerUp]);
+
+  // Zone Management Handlers
+  const handleAddZone = () => {
+    if (!selectedAnalyticsCamId) return;
+    const current = localZones[selectedAnalyticsCamId] || [];
+    const newId = `zone-${Date.now()}`;
+    const newZone: AnalyticsZone = {
+      id: newId,
+      name: `Detection Zone ${current.length + 1}`,
+      type: current.length === 0 ? 'motion' : 'intrusion',
+      x: 25 + (current.length % 3) * 5,
+      y: 25 + (current.length % 3) * 5,
+      w: 35,
+      h: 30,
+      min_confidence: 0.6,
+      enabled: true,
+      notify: true,
+      cooldown_seconds: 60,
+      objects: ['person', 'car'],
+    };
+    setLocalZones(prev => ({
+      ...prev,
+      [selectedAnalyticsCamId]: [...(prev[selectedAnalyticsCamId] || []), newZone],
+    }));
+    setActiveZoneId(newId);
+  };
+
+  const handleUpdateZone = (zoneId: string, patch: Partial<AnalyticsZone>) => {
+    if (!selectedAnalyticsCamId) return;
+    setLocalZones(prev => ({
+      ...prev,
+      [selectedAnalyticsCamId]: (prev[selectedAnalyticsCamId] || []).map(z =>
+        z.id === zoneId ? { ...z, ...patch } : z
+      ),
+    }));
+  };
+
+  const handleDeleteZone = (zoneId: string) => {
+    if (!selectedAnalyticsCamId) return;
+    setLocalZones(prev => ({
+      ...prev,
+      [selectedAnalyticsCamId]: (prev[selectedAnalyticsCamId] || []).filter(z => z.id !== zoneId),
+    }));
+    if (activeZoneId === zoneId) setActiveZoneId(null);
+  };
+
+  const handleSaveZones = async () => {
+    if (!selectedAnalyticsCamId) return;
+    const cam = cameras.find(c => c.id === selectedAnalyticsCamId);
+    if (!cam) return;
+    setSavingZones(true);
+    try {
+      const current = localZones[selectedAnalyticsCamId] || [];
+      const formattedZones = current.map(z => ({
+        id: z.id,
+        name: z.name,
+        type: z.type,
+        x: z.x,
+        y: z.y,
+        w: z.w,
+        h: z.h,
+        points: boxToPoints(z.x, z.y, z.w, z.h),
+        objects: z.objects,
+        min_confidence: z.min_confidence,
+        notify: z.notify,
+        cooldown_seconds: z.cooldown_seconds,
+        enabled: z.enabled,
+        schedule: 'always',
+      }));
+
+      const updatedConfig = { ...(cam.config || {}), zones: formattedZones };
+      const res = await fetch(apiUrl(`/cameras/${selectedAnalyticsCamId}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: updatedConfig }),
+      });
+
+      if (res.ok) {
+        const updatedCam = await res.json();
+        setCameras(prev => prev.map(c => c.id === selectedAnalyticsCamId ? { ...c, ...updatedCam } : c));
+        setZoneToast({ message: `Detection zones saved for ${cam.name}`, ok: true });
+        setTimeout(() => setZoneToast(null), 3500);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setZoneToast({ message: err.detail || 'Failed to save zones.', ok: false });
+        setTimeout(() => setZoneToast(null), 4500);
+      }
+    } catch {
+      setZoneToast({ message: 'Network error saving zones.', ok: false });
+      setTimeout(() => setZoneToast(null), 4500);
+    } finally {
+      setSavingZones(false);
+    }
+  };
+
+  const selectedCam = cameras.find(c => c.id === selectedAnalyticsCamId) || cameras[0] || null;
+  const currentZones = (selectedCam && localZones[selectedCam.id]) || [];
+  const activeZone = currentZones.find(z => z.id === activeZoneId) || null;
+
+  const selectedCamEvents = useMemo(() => {
+    if (!selectedCam) return [];
+    return events.filter(e => !e.camera_id || e.camera_id === selectedCam.id);
+  }, [events, selectedCam]);
 
   const GridIcon = ({ n }: { n: number }) => (
     <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor">
@@ -589,7 +967,7 @@ const LiveView: React.FC = () => {
           {[
             ['live', 'Live View'],
             ['playback', 'Playback'],
-            ['analytics', 'Analytics'],
+            ['analytics', 'Analytics Studio'],
           ].map(([mode, label]) => (
             <button key={mode} className={`topbar-tab${viewMode === mode ? ' active' : ''}`} onClick={() => setViewMode(mode as ViewMode)}>
               {label}
@@ -597,7 +975,7 @@ const LiveView: React.FC = () => {
           ))}
         </div>
 
-        <div className="topbar-stats" style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
+        <div className="topbar-stats" style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
           <div style={{ fontSize: '0.84rem', color: 'var(--t2)' }}>
             <DigitalClock />
           </div>
@@ -640,33 +1018,36 @@ const LiveView: React.FC = () => {
           >
             <ExternalLink size={13} />
           </button>
-          <div className="layout-toggle" style={{ height: 28, padding: '2px 4px' }}>
-            {([1, 2, 4, 9, 16] as const).map(n => (
+          {viewMode === 'live' && (
+            <div className="layout-toggle" style={{ height: 28, padding: '2px 4px' }}>
+              {([1, 2, 4, 9, 16] as const).map(n => (
+                <button
+                  key={n}
+                  className={`layout-btn${layout === n && !maximizedId ? ' active' : ''}`}
+                  title={`${n}-Camera Layout`}
+                  onClick={() => { setMaximizedId(null); setLayout(n); }}
+                >
+                  <GridIcon n={n} />
+                </button>
+              ))}
+              <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 3px' }} />
               <button
-                key={n}
-                className={`layout-btn${layout === n && !maximizedId ? ' active' : ''}`}
-                title={`${n}-Camera Layout`}
-                onClick={() => { setMaximizedId(null); setLayout(n); }}
+                className="layout-btn"
+                title="Fullscreen Monitor Grid"
+                onClick={() => {
+                  const el = document.querySelector('.cam-grid') as HTMLElement;
+                  if (el) requestNativeFullscreen(el);
+                }}
               >
-                <GridIcon n={n} />
+                <Maximize2 size={13} />
               </button>
-            ))}
-            <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 3px' }} />
-            <button
-              className="layout-btn"
-              title="Fullscreen Monitor Grid"
-              onClick={() => {
-                const el = document.querySelector('.cam-grid') as HTMLElement;
-                if (el) requestNativeFullscreen(el);
-              }}
-            >
-              <Maximize2 size={13} />
-            </button>
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {viewMode === 'playback' ? (
+      {/* VIEW MODE 1: PLAYBACK */}
+      {viewMode === 'playback' && (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 12, padding: 14 }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <input className="form-input" type="date" value={syncDate} onChange={e => setSyncDate(e.target.value)} style={{ width: 150 }} />
@@ -694,7 +1075,7 @@ const LiveView: React.FC = () => {
               onChange={e => seekSyncVideos(syncWindowStart + (parseInt(e.target.value) / 100) * syncSpan)}
               style={{ flex: 1, accentColor: 'var(--cyan)' }}
             />
-            <span style={{ color: 'var(--t2)' }}>{new Date(syncTargetMs).toLocaleString()}</span>
+            <span style={{ color: 'var(--t2)', fontSize: '0.82rem', fontFamily: 'JetBrains Mono' }}>{new Date(syncTargetMs).toLocaleString()}</span>
           </div>
           {cameras.length === 0 ? (
             <div className="empty" style={{ flex: 1 }}>
@@ -711,22 +1092,15 @@ const LiveView: React.FC = () => {
                     {rec ? (
                       <video
                         ref={el => { syncVideoRefs.current[cam.id] = el; }}
-                        key={`${rec.url}@${rec.playOffset.toFixed(3)}`}
                         src={withStart(rec.url, rec.playOffset)}
-                        autoPlay={!syncPaused}
-                        muted
+                        controls
+                        autoPlay
                         playsInline
-                        onLoadedMetadata={e => {
-                          const video = e.currentTarget;
-                          const offset = rec.playOffset;
-                          const duration = video.duration;
-                          if (Number.isFinite(duration) && duration > 1 && offset <= duration + 0.25) {
-                            video.currentTime = Math.min(offset, Math.max(0, duration - 0.25));
-                          }
-                        }}
+                        muted
+                        style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                       />
                     ) : (
-                      <div className="cam-placeholder"><Video size={26} /><span>No recording segment</span></div>
+                      <div className="cam-placeholder"><WifiOff size={24} /><span>No Footage At This Time</span></div>
                     )}
                   </div>
                 );
@@ -734,110 +1108,674 @@ const LiveView: React.FC = () => {
             </div>
           )}
         </div>
-      ) : (
-        <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: viewMode === 'analytics' ? '1fr 300px' : '1fr', gap: 12, padding: 14 }}>
-          {cameras.length === 0 ? (
-            <div className="empty" style={{ flex: 1 }}>
-              <div className="empty-title">No Cameras Added</div>
-              <div className="empty-sub">Go to Settings to add cameras manually or auto-discover ONVIF devices.</div>
-            </div>
-          ) : (
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              {maximizedId && activeMaxCam && (
-                <div className="cam-maximized-banner">
-                  <div className="cam-maximized-title">
-                    <button 
-                      className="btn btn-primary"
-                      style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 6 }}
-                      onClick={() => setMaximizedId(null)}
-                    >
-                      <Minimize2 size={13} /> Return to Multi-Grid (Esc)
-                    </button>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8 }}>
-                      <div className={`dot ${activeMaxCam.status !== 'offline' ? 'online' : 'offline'}`} />
-                      <span>{activeMaxCam.name}</span>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--cyan)', border: '1px solid var(--cyan-border)', padding: '1px 6px', borderRadius: 4 }}>
-                        {activeMaxCam.resolution || 'HD Main'}
-                      </span>
-                    </div>
-                  </div>
+      )}
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {cameras.length > 1 && prevMaxCam && nextMaxCam && (
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <button 
-                          className="layout-btn"
-                          onClick={() => setMaximizedId(prevMaxCam.id)}
-                          title={`Previous: ${prevMaxCam.name}`}
-                          style={{ fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 4 }}
-                        >
-                          <ChevronLeft size={13} /> {prevMaxCam.name}
-                        </button>
-                        <button 
-                          className="layout-btn"
-                          onClick={() => setMaximizedId(nextMaxCam.id)}
-                          title={`Next: ${nextMaxCam.name}`}
-                          style={{ fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 4 }}
-                        >
-                          {nextMaxCam.name} <ChevronRight size={13} />
-                        </button>
-                      </div>
-                    )}
-                    <button 
+      {/* VIEW MODE 2: LIVE MULTI-VIEW */}
+      {viewMode === 'live' && (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: 14 }}>
+          {maximizedId && activeMaxCam && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '6px 12px',
+                marginBottom: 10,
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--r-md)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  className="btn btn-primary"
+                  style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 6 }}
+                  onClick={() => setMaximizedId(null)}
+                >
+                  <Minimize2 size={13} /> Return to Multi-Grid (Esc)
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8 }}>
+                  <div className={`dot ${activeMaxCam.status !== 'offline' ? 'online' : 'offline'}`} />
+                  <span>{activeMaxCam.name}</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--cyan)', border: '1px solid var(--cyan-border)', padding: '1px 6px', borderRadius: 4 }}>
+                    {activeMaxCam.resolution || 'HD Main'}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {cameras.length > 1 && prevMaxCam && nextMaxCam && (
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button
                       className="layout-btn"
-                      onClick={() => {
-                        const el = document.querySelector('.cam-cell.is-maximized') as HTMLElement;
-                        if (el) requestNativeFullscreen(el);
-                      }}
-                      title="Fullscreen Camera"
+                      onClick={() => setMaximizedId(prevMaxCam.id)}
+                      title={`Previous: ${prevMaxCam.name}`}
                       style={{ fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 4 }}
                     >
-                      <Maximize2 size={12} /> Fullscreen
+                      <ChevronLeft size={13} /> {prevMaxCam.name}
+                    </button>
+                    <button
+                      className="layout-btn"
+                      onClick={() => setMaximizedId(nextMaxCam.id)}
+                      title={`Next: ${nextMaxCam.name}`}
+                      style={{ fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      {nextMaxCam.name} <ChevronRight size={13} />
                     </button>
                   </div>
-                </div>
-              )}
-              <div className={`cam-grid ${gridClass}`} style={{ flex: 1, minHeight: 0 }}>
-                {visibleCameras.map(cam => (
-                  <CameraFeed
-                    key={cam.id}
-                    cam={cam}
-                    paused={livePaused}
-                    analytics={viewMode === 'analytics'}
-                    maximized={maximizedId === cam.id}
-                    onMaximize={() => setMaximizedId(prev => prev === cam.id ? null : cam.id)}
-                  />
-                ))}
+                )}
+                <button
+                  className="layout-btn"
+                  onClick={() => {
+                    const el = document.querySelector('.cam-cell.is-maximized') as HTMLElement;
+                    if (el) requestNativeFullscreen(el);
+                  }}
+                  title="Fullscreen Camera"
+                  style={{ fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                >
+                  <Maximize2 size={12} /> Fullscreen
+                </button>
               </div>
             </div>
           )}
-          {viewMode === 'analytics' && (
-            <div className="card" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-              <div className="card-head"><span className="card-title">Active Detections</span></div>
-              <div style={{ height: 180, padding: 12 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData}>
-                    <XAxis dataKey="name" stroke="var(--t3)" />
-                    <YAxis stroke="var(--t3)" allowDecimals={false} />
-                    <Tooltip />
-                    <Bar dataKey="count" fill="var(--cyan)" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <div style={{ overflow: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {events.length === 0 ? <span style={{ color: 'var(--t3)' }}>No detections yet</span> : events.map((ev, i) => (
-                  <div key={ev.id || i} className="event-row">
-                    <Activity size={13} color="var(--cyan)" />
-                    <span className="event-text">{ev.object_class || 'event'} detected</span>
-                    <span className="event-time">{new Date(ev.timestamp || ev.created_at || Date.now()).toLocaleTimeString()}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <div className={`cam-grid ${gridClass}`} style={{ flex: 1, minHeight: 0 }}>
+            {visibleCameras.map(cam => (
+              <CameraFeed
+                key={cam.id}
+                cam={cam}
+                paused={livePaused}
+                analytics={false}
+                maximized={maximizedId === cam.id}
+                onMaximize={() => setMaximizedId(prev => prev === cam.id ? null : cam.id)}
+              />
+            ))}
+          </div>
         </div>
       )}
 
+      {/* VIEW MODE 3: INTERACTIVE ANALYTICS & DETECTION ZONE STUDIO */}
+      {viewMode === 'analytics' && (
+        <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 380px', gap: 14, padding: 14 }}>
+          {/* LEFT: Canvas & Stream Studio */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
+            {/* Camera Switcher Tabs */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', overflowX: 'auto', paddingBottom: 4 }}>
+              {cameras.map(cam => {
+                const count = (localZones[cam.id] || []).length;
+                const isSelected = selectedCam?.id === cam.id;
+                return (
+                  <button
+                    key={cam.id}
+                    className={`btn ${isSelected ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{
+                      fontSize: '0.76rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 7,
+                      whiteSpace: 'nowrap',
+                      padding: '5px 12px',
+                    }}
+                    onClick={() => {
+                      setSelectedAnalyticsCamId(cam.id);
+                      setActiveZoneId(null);
+                    }}
+                  >
+                    <div className={`dot ${cam.status !== 'offline' ? 'online' : 'offline'}`} />
+                    <span>{cam.name}</span>
+                    <span
+                      style={{
+                        fontSize: '0.66rem',
+                        background: isSelected ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.08)',
+                        padding: '1px 6px',
+                        borderRadius: 10,
+                      }}
+                    >
+                      {count} {count === 1 ? 'zone' : 'zones'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Interactive Video & Zone Dragging Canvas */}
+            {selectedCam ? (
+              <div
+                ref={canvasContainerRef}
+                className="cam-cell"
+                style={{
+                  flex: 1,
+                  minHeight: 320,
+                  position: 'relative',
+                  overflow: 'hidden',
+                  background: '#0a0d14',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--r-lg)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {/* Live Player Video Stream */}
+                {selectedCam.rtsp_url_main || selectedCam.rtsp_url_sub ? (
+                  <LivePlayer
+                    cameraId={selectedCam.id}
+                    quality="main"
+                    muted={true}
+                    paused={livePaused}
+                  />
+                ) : (
+                  <div className="cam-placeholder">
+                    <WifiOff size={28} />
+                    <span>No Live Stream Available</span>
+                  </div>
+                )}
+
+                {/* Privacy Masks */}
+                {selectedCam.config?.privacy_masks && Array.isArray(selectedCam.config.privacy_masks) && (
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 6 }}>
+                    {selectedCam.config.privacy_masks.map((mask: any, idx: number) => (
+                      <polygon
+                        key={idx}
+                        points={mask.points?.map((p: any) => `${p.x * 100},${p.y * 100}`).join(' ')}
+                        fill="rgba(0, 0, 0, 0.96)"
+                      />
+                    ))}
+                  </svg>
+                )}
+
+                {/* Interactive Detection Zones Layer */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    zIndex: 10,
+                    cursor: dragState.current ? 'grabbing' : 'default',
+                  }}
+                  onClick={() => setActiveZoneId(null)}
+                >
+                  {currentZones.map((zone) => {
+                    const isSelected = zone.id === activeZoneId;
+                    const theme = ZONE_COLORS[zone.type] || ZONE_COLORS.motion;
+
+                    return (
+                      <div
+                        key={zone.id}
+                        onPointerDown={(e) => handleStartDrag(e, zone.id, 'move')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveZoneId(zone.id);
+                        }}
+                        style={{
+                          position: 'absolute',
+                          left: `${zone.x}%`,
+                          top: `${zone.y}%`,
+                          width: `${zone.w}%`,
+                          height: `${zone.h}%`,
+                          border: isSelected ? '2px solid var(--cyan)' : `2px solid ${theme.border}`,
+                          background: isSelected ? 'rgba(0, 210, 255, 0.22)' : theme.bg,
+                          boxShadow: isSelected
+                            ? '0 0 16px rgba(0, 210, 255, 0.6), inset 0 0 12px rgba(0, 210, 255, 0.2)'
+                            : `0 0 8px ${theme.border}30`,
+                          cursor: 'move',
+                          userSelect: 'none',
+                          touchAction: 'none',
+                          borderRadius: 4,
+                          transition: dragState.current?.zoneId === zone.id ? 'none' : 'border-color 0.15s, box-shadow 0.15s',
+                        }}
+                      >
+                        {/* Zone Tag & Badge */}
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: -24,
+                            left: 0,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            background: isSelected ? 'var(--cyan)' : 'rgba(15, 17, 21, 0.95)',
+                            color: isSelected ? '#000' : theme.border,
+                            padding: '2px 8px',
+                            borderRadius: '4px 4px 0 0',
+                            fontSize: '0.68rem',
+                            fontWeight: 600,
+                            whiteSpace: 'nowrap',
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+                            border: isSelected ? 'none' : `1px solid ${theme.border}60`,
+                          }}
+                        >
+                          <Shield size={10} />
+                          <span>{zone.name}</span>
+                          <span style={{ opacity: 0.8, fontSize: '0.62rem' }}>[{theme.label}]</span>
+                        </div>
+
+                        {/* Interactive Resize Handles (Rendered on Active Selection) */}
+                        {isSelected && (
+                          <>
+                            {/* Bottom-Right Handle */}
+                            <div
+                              onPointerDown={(e) => handleStartDrag(e, zone.id, 'resize-se')}
+                              style={{
+                                position: 'absolute',
+                                right: -6,
+                                bottom: -6,
+                                width: 14,
+                                height: 14,
+                                background: 'var(--cyan)',
+                                border: '2px solid #000',
+                                borderRadius: 3,
+                                cursor: 'se-resize',
+                                zIndex: 12,
+                                boxShadow: '0 0 6px rgba(0,210,255,0.8)',
+                              }}
+                            />
+                            {/* Bottom-Left Handle */}
+                            <div
+                              onPointerDown={(e) => handleStartDrag(e, zone.id, 'resize-sw')}
+                              style={{
+                                position: 'absolute',
+                                left: -6,
+                                bottom: -6,
+                                width: 14,
+                                height: 14,
+                                background: 'var(--cyan)',
+                                border: '2px solid #000',
+                                borderRadius: 3,
+                                cursor: 'sw-resize',
+                                zIndex: 12,
+                                boxShadow: '0 0 6px rgba(0,210,255,0.8)',
+                              }}
+                            />
+                            {/* Top-Right Handle */}
+                            <div
+                              onPointerDown={(e) => handleStartDrag(e, zone.id, 'resize-ne')}
+                              style={{
+                                position: 'absolute',
+                                right: -6,
+                                top: -6,
+                                width: 14,
+                                height: 14,
+                                background: 'var(--cyan)',
+                                border: '2px solid #000',
+                                borderRadius: 3,
+                                cursor: 'ne-resize',
+                                zIndex: 12,
+                                boxShadow: '0 0 6px rgba(0,210,255,0.8)',
+                              }}
+                            />
+                            {/* Top-Left Handle */}
+                            <div
+                              onPointerDown={(e) => handleStartDrag(e, zone.id, 'resize-nw')}
+                              style={{
+                                position: 'absolute',
+                                left: -6,
+                                top: -6,
+                                width: 14,
+                                height: 14,
+                                background: 'var(--cyan)',
+                                border: '2px solid #000',
+                                borderRadius: 3,
+                                cursor: 'nw-resize',
+                                zIndex: 12,
+                                boxShadow: '0 0 6px rgba(0,210,255,0.8)',
+                              }}
+                            />
+                            {/* Live Dimension HUD */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                bottom: 4,
+                                right: 6,
+                                fontSize: '0.62rem',
+                                color: '#fff',
+                                background: 'rgba(0,0,0,0.75)',
+                                padding: '2px 5px',
+                                borderRadius: 3,
+                                pointerEvents: 'none',
+                                fontFamily: 'JetBrains Mono, monospace',
+                              }}
+                            >
+                              {zone.w}% × {zone.h}%
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Helpful Canvas Footer Overlay */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: 12,
+                    left: 12,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    background: 'rgba(15, 17, 21, 0.88)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 20,
+                    padding: '4px 12px',
+                    fontSize: '0.68rem',
+                    color: 'var(--t2)',
+                    zIndex: 15,
+                    pointerEvents: 'none',
+                  }}
+                >
+                  <Info size={12} color="var(--cyan)" />
+                  <span>Click & drag zones to reposition • Drag corner handles to resize • Click zone to configure</span>
+                </div>
+              </div>
+            ) : (
+              <div className="empty" style={{ flex: 1 }}>
+                <div className="empty-title">No Camera Selected</div>
+                <div className="empty-sub">Please select a camera to configure detection zones.</div>
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT SIDEBAR: Zone Inspector & AI Operations */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, overflowY: 'auto' }}>
+            {/* Top Toolbar: Add Zone & Save */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                className="btn btn-ghost"
+                onClick={handleAddZone}
+                style={{ flex: 1, fontSize: '0.78rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+              >
+                <Plus size={14} color="var(--cyan)" /> Add Detection Zone
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleSaveZones}
+                disabled={savingZones}
+                style={{ flex: 1, fontSize: '0.78rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+              >
+                {savingZones ? (
+                  <>
+                    <div className="spinner" style={{ width: 13, height: 13 }} /> Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save size={14} /> Save Zones
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Notification Toast */}
+            {zoneToast && (
+              <div
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 6,
+                  fontSize: '0.74rem',
+                  background: zoneToast.ok ? 'rgba(46, 213, 115, 0.15)' : 'rgba(255, 71, 87, 0.15)',
+                  border: zoneToast.ok ? '1px solid var(--green)' : '1px solid var(--red)',
+                  color: zoneToast.ok ? 'var(--green)' : 'var(--red)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <Check size={14} />
+                <span>{zoneToast.message}</span>
+              </div>
+            )}
+
+            {/* Zone Inspector Card */}
+            {activeZone ? (
+              <div className="card" style={{ padding: 14 }}>
+                <div className="card-head" style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Sliders size={14} color="var(--cyan)" />
+                    <span className="card-title">Zone Inspector</span>
+                  </div>
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => handleDeleteZone(activeZone.id)}
+                    title="Delete Zone"
+                    style={{ padding: '4px 8px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <Trash2 size={12} /> Delete
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {/* Zone Name */}
+                  <div className="form-group">
+                    <label className="form-label">Zone Name</label>
+                    <input
+                      className="form-input"
+                      value={activeZone.name}
+                      onChange={(e) => handleUpdateZone(activeZone.id, { name: e.target.value })}
+                      placeholder="e.g. Front Door, Driveway"
+                    />
+                  </div>
+
+                  {/* Zone Type */}
+                  <div className="form-group">
+                    <label className="form-label">Detection Type</label>
+                    <select
+                      className="form-input"
+                      value={activeZone.type}
+                      onChange={(e) => handleUpdateZone(activeZone.id, { type: e.target.value as any })}
+                    >
+                      <option value="motion">Motion Detection (General Activity)</option>
+                      <option value="intrusion">Intrusion Alert (Immediate Alarm)</option>
+                      <option value="tripwire">Tripwire / Perimeter Boundary</option>
+                      <option value="privacy">Privacy Mask (Blackout Area)</option>
+                    </select>
+                  </div>
+
+                  {/* Sensitivity / Min Confidence */}
+                  <div className="form-group">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <label className="form-label" style={{ margin: 0 }}>Sensitivity Threshold</label>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--cyan)', fontFamily: 'JetBrains Mono' }}>
+                        {Math.round(activeZone.min_confidence * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="10"
+                      max="95"
+                      step="5"
+                      value={Math.round(activeZone.min_confidence * 100)}
+                      onChange={(e) => handleUpdateZone(activeZone.id, { min_confidence: parseInt(e.target.value) / 100 })}
+                      style={{ width: '100%', accentColor: 'var(--cyan)' }}
+                    />
+                  </div>
+
+                  {/* Filtered Objects */}
+                  <div className="form-group">
+                    <label className="form-label">Target Object Classes</label>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                      {AVAILABLE_OBJECTS.map((obj) => {
+                        const isIncluded = activeZone.objects.includes(obj);
+                        return (
+                          <button
+                            key={obj}
+                            type="button"
+                            onClick={() => {
+                              const next = isIncluded
+                                ? activeZone.objects.filter(o => o !== obj)
+                                : [...activeZone.objects, obj];
+                              handleUpdateZone(activeZone.id, { objects: next });
+                            }}
+                            style={{
+                              fontSize: '0.7rem',
+                              padding: '3px 8px',
+                              borderRadius: 4,
+                              cursor: 'pointer',
+                              border: isIncluded ? '1px solid var(--cyan)' : '1px solid var(--border)',
+                              background: isIncluded ? 'rgba(0, 210, 255, 0.15)' : 'transparent',
+                              color: isIncluded ? 'var(--cyan)' : 'var(--t2)',
+                              textTransform: 'capitalize',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            {obj}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Toggles */}
+                  <div style={{ display: 'flex', gap: 16, marginTop: 4 }}>
+                    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={activeZone.enabled}
+                        onChange={(e) => handleUpdateZone(activeZone.id, { enabled: e.target.checked })}
+                        style={{ accentColor: 'var(--cyan)' }}
+                      />
+                      <span>Active</span>
+                    </label>
+                    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={activeZone.notify}
+                        onChange={(e) => handleUpdateZone(activeZone.id, { notify: e.target.checked })}
+                        style={{ accentColor: 'var(--cyan)' }}
+                      />
+                      <span>Trigger Alerts</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="card" style={{ padding: 14, textAlign: 'center', color: 'var(--t3)' }}>
+                <Layers size={24} style={{ margin: '8px auto', opacity: 0.6 }} />
+                <div style={{ fontSize: '0.76rem', color: 'var(--t2)', marginBottom: 4 }}>No Zone Selected</div>
+                <div style={{ fontSize: '0.7rem' }}>
+                  Click any zone on the camera canvas to inspect or adjust its sensitivity and filters.
+                </div>
+              </div>
+            )}
+
+            {/* Configured Zones List for Current Camera */}
+            <div className="card" style={{ padding: 14 }}>
+              <div className="card-head" style={{ marginBottom: 10 }}>
+                <span className="card-title">Zones ({currentZones.length})</span>
+              </div>
+              {currentZones.length === 0 ? (
+                <div style={{ fontSize: '0.72rem', color: 'var(--t3)', padding: 8 }}>
+                  No detection zones set. Entire camera view is monitored.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {currentZones.map((z) => {
+                    const isSelected = z.id === activeZoneId;
+                    const theme = ZONE_COLORS[z.type] || ZONE_COLORS.motion;
+                    return (
+                      <div
+                        key={z.id}
+                        onClick={() => setActiveZoneId(z.id)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '6px 10px',
+                          borderRadius: 6,
+                          background: isSelected ? 'rgba(0, 210, 255, 0.1)' : 'rgba(255, 255, 255, 0.02)',
+                          border: isSelected ? '1px solid var(--cyan)' : '1px solid var(--border)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: '50%', background: theme.border }} />
+                          <div>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 500 }}>{z.name}</div>
+                            <div style={{ fontSize: '0.64rem', color: 'var(--t3)' }}>
+                              {theme.label} • {z.objects.join(', ')}
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteZone(z.id);
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--t3)',
+                            cursor: 'pointer',
+                            padding: 4,
+                          }}
+                          title="Remove zone"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Real-Time Detection Feed for Selected Camera */}
+            <div className="card" style={{ padding: 14, flex: 1, minHeight: 180, display: 'flex', flexDirection: 'column' }}>
+              <div className="card-head" style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="card-title">Recent Detections</span>
+                <Sparkles size={13} color="var(--pink)" />
+              </div>
+              <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {selectedCamEvents.length === 0 ? (
+                  <div style={{ fontSize: '0.72rem', color: 'var(--t3)', padding: 12, textAlign: 'center' }}>
+                    No recent detections on this feed.
+                  </div>
+                ) : (
+                  selectedCamEvents.slice(0, 15).map((ev, i) => (
+                    <div
+                      key={ev.id || i}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '6px 8px',
+                        borderRadius: 4,
+                        background: 'rgba(255, 255, 255, 0.02)',
+                        border: '1px solid var(--border)',
+                        fontSize: '0.72rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Activity size={12} color="var(--cyan)" />
+                        <span style={{ fontWeight: 500 }}>{ev.object_class || 'Motion Event'}</span>
+                      </div>
+                      <span style={{ fontSize: '0.66rem', color: 'var(--t3)', fontFamily: 'JetBrains Mono' }}>
+                        {new Date(ev.timestamp || ev.created_at || Date.now()).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Detection Frequency Chart */}
+            {chartData.length > 0 && (
+              <div className="card" style={{ padding: 12 }}>
+                <div className="card-head" style={{ marginBottom: 6 }}>
+                  <span className="card-title">Activity Breakdown</span>
+                </div>
+                <div style={{ height: 100 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
+                      <XAxis dataKey="name" stroke="var(--t3)" tick={{ fontSize: 10 }} />
+                      <YAxis stroke="var(--t3)" allowDecimals={false} tick={{ fontSize: 10 }} />
+                      <Tooltip contentStyle={{ background: '#161920', border: '1px solid var(--border)', fontSize: '0.72rem' }} />
+                      <Bar dataKey="count" fill="var(--cyan)" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

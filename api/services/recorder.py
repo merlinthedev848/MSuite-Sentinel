@@ -642,38 +642,54 @@ def is_finalized_cached(path: str, st: os.stat_result) -> bool:
 
 
 _LIST_CACHE: dict[str, tuple[float, list]] = {}
+_RECORDING_ENTRY_CACHE: dict[tuple[str, int, int], dict] = {}
 
 
 def list_recordings(camera_id: str | None = None) -> list[dict]:
-    """Return recording files. Repeat calls within two seconds reuse the last scan."""
+    """Return recording files. Cached for high throughput and instantaneous retrieval."""
     cache_key = camera_id or "*"
     cached = _LIST_CACHE.get(cache_key)
     now_mono = datetime.now(timezone.utc).timestamp()
-    if cached and now_mono - cached[0] < 2.0:
+    if cached and now_mono - cached[0] < 20.0:
         return cached[1]
     results = _scan_recordings(camera_id)
     _LIST_CACHE[cache_key] = (now_mono, results)
-    if len(_LIST_CACHE) > 32:
+    if len(_LIST_CACHE) > 64:
         _LIST_CACHE.clear()
         _LIST_CACHE[cache_key] = (now_mono, results)
     return results
 
 
 def _iter_camera_mp4s(cam_dir: Path):
-    """Yield mp4 files in the camera directory and in date folders under it."""
+    """Yield (Path, stat) tuples using fast directory traversal."""
     try:
-        for dirpath, dirnames, filenames in os.walk(cam_dir):
-            dirnames[:] = [name for name in dirnames if not name.startswith(".")]
-            for name in filenames:
-                if name.startswith(".") or not name.endswith(".mp4"):
+        with os.scandir(cam_dir) as it:
+            for entry in it:
+                if entry.name.startswith("."):
                     continue
-                yield Path(dirpath) / name
+                if entry.is_file() and entry.name.endswith(".mp4"):
+                    try:
+                        yield Path(entry.path), entry.stat()
+                    except OSError:
+                        continue
+                elif entry.is_dir():
+                    try:
+                        with os.scandir(entry.path) as sub_it:
+                            for sub_entry in sub_it:
+                                if not sub_entry.name.startswith(".") and sub_entry.is_file() and sub_entry.name.endswith(".mp4"):
+                                    try:
+                                        yield Path(sub_entry.path), sub_entry.stat()
+                                    except OSError:
+                                        continue
+                    except OSError:
+                        continue
     except OSError:
         return
 
 
 def _scan_recordings(camera_id: str | None = None) -> list[dict]:
-    """Return recording files from every configured root, including nested date folders."""
+    """Return recording files from every configured root with zero-I/O metadata cache."""
+    global _RECORDING_ENTRY_CACHE
     results = []
     bases = [base for base in _recording_roots() if base.exists()]
     if not bases:
@@ -693,42 +709,47 @@ def _scan_recordings(camera_id: str | None = None) -> list[dict]:
         for cam_dir in cam_dirs:
             if not cam_dir.is_dir():
                 continue
-            files = list(_iter_camera_mp4s(cam_dir))
-            newest_mtime = None
-            for path in files:
-                try:
-                    mtime = path.stat().st_mtime
-                except OSError:
-                    continue
-                if newest_mtime is None or mtime > newest_mtime:
-                    newest_mtime = mtime
+            files_with_stat = list(_iter_camera_mp4s(cam_dir))
+            if not files_with_stat:
+                continue
 
-            for path in files:
+            newest_mtime = max((st.st_mtime for _, st in files_with_stat), default=None)
+
+            for path, stat in files_with_stat:
                 unique_key = (cam_dir.name, path.name)
                 if unique_key in seen_filenames:
                     continue
 
-                try:
-                    stat = path.stat()
-                    if stat.st_size < 10240:
-                        continue
-                    writing = (
-                        active_recorders.get(cam_dir.name) == "recording"
-                        and newest_mtime is not None
-                        and stat.st_mtime == newest_mtime
-                        and (now_ts - stat.st_mtime) < (SEGMENT_DURATION + 15)
-                    )
-                    if writing:
-                        continue
-                    info = mp4_info_cached(str(path), stat)
-                    if not info.finalized:
-                        continue
-                    mtime = stat.st_mtime
-                    size_mb = round(stat.st_size / 1_048_576, 2)
-                except OSError:
+                if stat.st_size < 10240:
+                    continue
+
+                writing = (
+                    active_recorders.get(cam_dir.name) == "recording"
+                    and newest_mtime is not None
+                    and stat.st_mtime == newest_mtime
+                    and (now_ts - stat.st_mtime) < (SEGMENT_DURATION + 15)
+                )
+                if writing:
+                    continue
+
+                cache_key = (str(path), stat.st_size, stat.st_mtime_ns)
+                cached_entry = _RECORDING_ENTRY_CACHE.get(cache_key)
+                if cached_entry is not None:
+                    seen_filenames.add(unique_key)
+                    results.append(cached_entry)
+                    if len(results) >= max_results:
+                        results.sort(key=lambda item: item["created_at"])
+                        return results
+                    continue
+
+                info = mp4_info_cached(str(path), stat)
+                if not info.finalized:
                     continue
 
                 seen_filenames.add(unique_key)
+                mtime = stat.st_mtime
+                size_mb = round(stat.st_size / 1_048_576, 2)
+
                 match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", path.name)
                 if match:
                     y, m, d, hr, minute, sec = match.groups()
@@ -741,7 +762,7 @@ def _scan_recordings(camera_id: str | None = None) -> list[dict]:
                     created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 
                 duration = believable_duration(info.duration_seconds, stat.st_size)
-                results.append({
+                entry_dict = {
                     "camera_id": cam_dir.name,
                     "filename": path.name,
                     "path": str(path),
@@ -749,10 +770,16 @@ def _scan_recordings(camera_id: str | None = None) -> list[dict]:
                     "created_at": created_at,
                     "duration_seconds": round(duration, 3),
                     "url": f"/recordings/{cam_dir.name}/{path.name}",
-                })
+                }
+                _RECORDING_ENTRY_CACHE[cache_key] = entry_dict
+                results.append(entry_dict)
+
                 if len(results) >= max_results:
                     results.sort(key=lambda item: item["created_at"])
                     return results
+
+    if len(_RECORDING_ENTRY_CACHE) > 100000:
+        _RECORDING_ENTRY_CACHE.clear()
 
     results.sort(key=lambda item: item["created_at"])
     return results

@@ -320,7 +320,7 @@ const Playback: React.FC = () => {
       try {
         const [recRes, eventRes] = await Promise.all([
           fetch(apiUrl(`/recordings-list?camera_id=${selectedCam.id}`)),
-          fetch(apiUrl(`/events?camera_id=${selectedCam.id}&limit=5000`))
+          fetch(apiUrl(`/events?camera_id=${selectedCam.id}&limit=1000`))
         ]);
 
         let recs: RecordingFile[] = [];
@@ -417,27 +417,30 @@ const Playback: React.FC = () => {
           setTimelineEnd(targetMs + 3 * 3600 * 1000);
           setVideoError('No recorder file covers this time. Checking the camera...');
         }
+        if (isMounted) setLoading(false);
 
+        // Fetch camera edge gaps asynchronously in background without blocking local playback
         const points = evs.map(event => event.timestampMs).filter(stamp => !Number.isNaN(stamp));
         const days = uncoveredDays(recs, points.concat(targetMs)).slice(0, 3);
         if (isMounted && days.length > 0) {
-          const merged = await ensureEdge(selectedCam.id, days, recs);
-          if (isMounted && gen === seekGen.current) {
-            rememberRecordings(merged);
-            const again = resolvePlaybackTarget(merged, targetMs, true);
-            if (!localHit && again) {
-              openResolved(merged, again.url, again.seekMs);
-            } else if (!localHit) {
-              setVideoError('No recording segment covers the selected date and time. The camera has no footage for that gap either.');
+          ensureEdge(selectedCam.id, days, recs).then(merged => {
+            if (isMounted && gen === seekGen.current) {
+              rememberRecordings(merged);
+              const again = resolvePlaybackTarget(merged, targetMs, true);
+              if (!localHit && again) {
+                openResolved(merged, again.url, again.seekMs);
+              } else if (!localHit) {
+                setVideoError('No recording segment covers the selected date and time. The camera has no footage for that gap either.');
+              }
             }
-          }
+          }).catch(() => {});
         } else if (isMounted && !localHit) {
           setVideoError('No recording segment covers the selected date and time.');
         }
       } catch (err) {
         console.error('Failed to load recordings', err);
       }
-      setLoading(false);
+      if (isMounted) setLoading(false);
     };
 
     loadData();
