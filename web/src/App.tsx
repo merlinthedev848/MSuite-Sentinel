@@ -1,10 +1,12 @@
 import React, { Suspense, lazy, useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom';
-import { Video, PlaySquare, Bell, Settings as SettingsIcon, ShieldCheck, HardDrive, LogOut, Wifi, LayoutDashboard, Map, Bot, Send, X, Volume2, VolumeX, Tv } from 'lucide-react';
+import { BrowserRouter as Router, Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { Video, PlaySquare, Bell, Settings as SettingsIcon, ShieldCheck, HardDrive, LogOut, Wifi, LayoutDashboard, Map, Bot, Send, X, Volume2, VolumeX, Tv, Smartphone } from 'lucide-react';
 
 import Login     from './pages/Login';
 import { apiUrl } from './lib/endpoints';
 import { audioAlerts } from './lib/audioAlerts';
+import { shouldUseMobileView, setViewPreference } from './lib/mobileDetect';
+import './mobile.css';
 
 const LiveView = lazy(() => import('./pages/LiveView'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -14,6 +16,7 @@ const Events = lazy(() => import('./pages/Events'));
 const Operations = lazy(() => import('./pages/Operations'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Wallboard = lazy(() => import('./pages/Wallboard'));
+const MobileView = lazy(() => import('./pages/MobileView'));
 
 try {
   localStorage.removeItem('mview_token');
@@ -37,6 +40,7 @@ window.fetch = async (...args) => {
 };
 
 const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void; onToggleAI: () => void; showAIActive: boolean }) => {
+  const navigate = useNavigate();
   const [cameras, setCameras] = useState<any[]>([]);
   const [events,  setEvents]  = useState<any[]>([]);
   const [storage, setStorage] = useState<any>(null);
@@ -206,6 +210,18 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
         >
           {audioEnabled ? <Volume2 size={16} style={{ color: 'var(--cyan)' }} /> : <VolumeX size={16} style={{ color: 'var(--t3)' }} />}
           Alert Sound: {audioEnabled ? 'ON' : 'OFF'}
+        </button>
+
+        <button 
+          className="nav-item"
+          onClick={() => {
+            setViewPreference('mobile');
+            navigate('/mobile');
+          }}
+          style={{ border: 'none', background: 'transparent', textAlign: 'left', width: '100%', cursor: 'pointer', outline: 'none', display: 'flex', alignItems: 'center', gap: 10 }}
+        >
+          <Smartphone size={16} style={{ color: 'var(--cyan)' }} />
+          Mobile View
         </button>
 
         <div className="nav-section">System</div>
@@ -425,7 +441,35 @@ class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { 
 function AuthenticatedShell({ onLogout }: { onLogout: () => void }) {
   const [showAIDrawer, setShowAIDrawer] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const isWallboard = location.pathname === '/wallboard';
+  const isMobile = location.pathname.startsWith('/mobile');
+
+  // Auto-detect mobile devices and redirect to /mobile if appropriate
+  useEffect(() => {
+    if (shouldUseMobileView() && !location.pathname.startsWith('/mobile') && location.pathname !== '/wallboard') {
+      let tab = 'live';
+      if (location.pathname.includes('playback')) tab = 'playback';
+      else if (location.pathname.includes('events')) tab = 'events';
+      else if (location.pathname.includes('operations') || location.pathname.includes('settings')) tab = 'system';
+
+      const searchParams = new URLSearchParams(location.search);
+      if (!searchParams.has('tab')) {
+        searchParams.set('tab', tab);
+      }
+      navigate(`/mobile?${searchParams.toString()}`, { replace: true });
+    }
+  }, [location.pathname, location.search, navigate]);
+
+  if (isMobile) {
+    return (
+      <AppErrorBoundary>
+        <Suspense fallback={<div className="empty">Loading Sentinel Mobile...</div>}>
+          <MobileView onLogout={onLogout} />
+        </Suspense>
+      </AppErrorBoundary>
+    );
+  }
 
   if (isWallboard) {
     return (
@@ -453,6 +497,7 @@ function AuthenticatedShell({ onLogout }: { onLogout: () => void }) {
               <Route path="/operations" element={<Operations />}  />
               <Route path="/settings"   element={<Settings />}    />
               <Route path="/wallboard"  element={<Wallboard />}   />
+              <Route path="/mobile"     element={<MobileView onLogout={onLogout} />} />
               <Route path="*"           element={<LiveView />}    />
             </Routes>
           </Suspense>
