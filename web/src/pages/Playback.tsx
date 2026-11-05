@@ -254,20 +254,24 @@ const Playback: React.FC = () => {
           const data = await res.json();
           setCameras(data);
           if (data.length > 0) {
+            let matched = false;
             if (initCamId) {
               const cam = data.find((c: Camera) => c.id === initCamId);
               if (cam) {
                 setSelectedCam(cam);
-                return;
+                matched = true;
               }
             }
-            setSelectedCam(data[0]);
+            if (!matched) {
+              setSelectedCam(data[0]);
+            }
           }
         }
       } catch (err) {
         console.error("Failed to load cameras:", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
     loadCameras();
   }, [initCamId]);

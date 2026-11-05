@@ -266,10 +266,8 @@ async def get_system_health():
     snapshot_health = snapshot.get("health") if isinstance(snapshot.get("health"), dict) else {}
 
     storage_path = settings.storage_path
-    try:
-        total, used, free = shutil.disk_usage(storage_path)
-    except FileNotFoundError:
-        total, used, free = (0, 0, 0)
+    from api.services.local_core import _safe_disk_usage
+    total, used, free = _safe_disk_usage(storage_path)
     total_gb = round(total / (1024**3), 2)
     used_gb = round(used / (1024**3), 2)
     free_gb = round(free / (1024**3), 2)
@@ -294,7 +292,8 @@ async def get_system_health():
             "used_gb": used_gb,
             "free_gb": free_gb,
             "usage_percent": round((used / total) * 100, 2) if total > 0 else 0
-        }
+        },
+        "record_codec": snapshot_health.get("record_codec") or getattr(settings, "record_codec", "copy"),
     }
 
 

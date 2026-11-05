@@ -27,21 +27,48 @@ from api.models.camera import Camera
 logger = logging.getLogger("mView-LocalCore")
 
 
+def _safe_disk_usage(path_str: str) -> tuple[int, int, int]:
+    """Safely obtain disk usage for a path, gracefully falling back to existing parent directory or cwd."""
+    try:
+        p = Path(path_str)
+        while True:
+            if p.exists():
+                try:
+                    return shutil.disk_usage(str(p))
+                except Exception:
+                    pass
+            if p == p.parent:
+                break
+            p = p.parent
+    except Exception:
+        pass
+    for fallback in [Path.cwd(), Path.home(), "."]:
+        try:
+            return shutil.disk_usage(str(fallback))
+        except Exception:
+            pass
+    return (0, 0, 0)
+
+
 class LocalCore:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._last_network: dict[str, float] | None = None
         self._last_storage_refresh = 0.0
+        try:
+            initial_health = self._health_payload()
+        except Exception:
+            initial_health = None
         self._snapshot: dict[str, Any] = {
             "type": "snapshot",
             "cameras": [],
             "events": [],
-            "health": None,
+            "health": initial_health,
             "recording": {},
             "recording_storage": None,
             "stream_diagnostics": {},
-            "updated_at": None,
+            "updated_at": datetime.now(timezone.utc).isoformat() if initial_health else None,
         }
 
     async def publish(self, event_type: str, payload: dict[str, Any]) -> None:
@@ -76,6 +103,12 @@ class LocalCore:
         async with self._lock:
             self._subscribers.add(queue)
             snapshot = dict(self._snapshot)
+        if snapshot.get("health") is None:
+            try:
+                snapshot["health"] = self._health_payload()
+            except Exception:
+                pass
+            asyncio.create_task(self.refresh_snapshot(include_storage=True))
         queue.put_nowait({"type": "snapshot", "payload": snapshot})
         return queue
 
@@ -127,10 +160,7 @@ class LocalCore:
         memory = psutil.virtual_memory()
         net = psutil.net_io_counters()
         storage_path = settings.storage_path
-        try:
-            total, used, free = shutil.disk_usage(storage_path)
-        except Exception:
-            total, used, free = (0, 0, 0)
+        total, used, free = _safe_disk_usage(storage_path)
 
         now = time.monotonic()
         up_mbps = 0.0
@@ -159,6 +189,7 @@ class LocalCore:
                 "free_gb": round(free / (1024**3), 2),
                 "usage_percent": round((used / total) * 100, 2) if total > 0 else 0,
             },
+            "record_codec": getattr(settings, "record_codec", "copy"),
             "latency_ms": round((time.monotonic() - started) * 1000),
         }
 
@@ -187,6 +218,7 @@ def _camera_payload(camera: Camera) -> dict[str, Any]:
     return {
         "id": camera.id,
         "name": camera.name,
+        "location": camera.location,
         "status": camera.status,
         "enabled": camera.enabled,
         "rtsp_url_main": mask_rtsp_url(camera.rtsp_url_main),
@@ -195,6 +227,7 @@ def _camera_payload(camera: Camera) -> dict[str, Any]:
         "model": camera.model,
         "resolution": camera.resolution,
         "onvif_endpoint": camera.onvif_endpoint,
+        "config": camera.config or {},
     }
 
 

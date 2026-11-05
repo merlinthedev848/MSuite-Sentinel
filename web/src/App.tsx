@@ -49,23 +49,30 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
   const [audioEnabled, setAudioEnabled] = useState(() => audioAlerts.isEnabled());
 
   useEffect(() => {
-    let fallbackTimer: number | undefined;
-
     const applySnapshot = (snapshot: any) => {
-      const h = snapshot?.health;
-      setCameras(Array.isArray(snapshot?.cameras) ? snapshot.cameras : []);
-      setEvents(Array.isArray(snapshot?.events) ? snapshot.events : []);
-      if (snapshot?.recording_storage) setRecordingStorage(snapshot.recording_storage);
-      if (h?.storage) {
-        setStorage(h.storage);
-        setSystemStats({
-          cpu: typeof h.cpu_usage_percent === 'number' ? h.cpu_usage_percent.toFixed(1) : '--',
-          up: typeof h.network?.up_mbps === 'number' ? h.network.up_mbps.toFixed(2) : '0.00',
-          down: typeof h.network?.down_mbps === 'number' ? h.network.down_mbps.toFixed(2) : '0.00',
-          latency: typeof h.latency_ms === 'number' ? `${h.latency_ms}` : '--',
-          network: h.status === 'online' ? 'OK' : 'DEGRADED',
-          codec: h.record_codec || '--',
-        });
+      if (!snapshot) return;
+      if (Array.isArray(snapshot.cameras) && snapshot.cameras.length > 0) {
+        setCameras(snapshot.cameras);
+      } else if (Array.isArray(snapshot.cameras)) {
+        setCameras(prev => (prev.length > 0 ? prev : snapshot.cameras));
+      }
+      if (Array.isArray(snapshot.events) && snapshot.events.length > 0) {
+        setEvents(snapshot.events);
+      }
+      if (snapshot.recording_storage) {
+        setRecordingStorage(snapshot.recording_storage);
+      }
+      const h = snapshot.health;
+      if (h) {
+        if (h.storage) setStorage(h.storage);
+        setSystemStats(prev => ({
+          cpu: typeof h.cpu_usage_percent === 'number' ? h.cpu_usage_percent.toFixed(1) : prev.cpu,
+          up: typeof h.network?.up_mbps === 'number' ? h.network.up_mbps.toFixed(2) : prev.up,
+          down: typeof h.network?.down_mbps === 'number' ? h.network.down_mbps.toFixed(2) : prev.down,
+          latency: typeof h.latency_ms === 'number' ? `${h.latency_ms}` : prev.latency,
+          network: h.status === 'online' ? 'OK' : (h.status ? 'DEGRADED' : prev.network),
+          codec: h.record_codec || prev.codec,
+        }));
       }
     };
 
@@ -73,27 +80,32 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
       try {
         const started = performance.now();
         const [c, e, h, s] = await Promise.all([
-          fetch(apiUrl('/cameras')).then(r => r.ok ? r.json() : []),
-          fetch(apiUrl('/events?limit=20')).then(r => r.ok ? r.json() : []),
+          fetch(apiUrl('/cameras')).then(r => r.ok ? r.json() : null),
+          fetch(apiUrl('/events?limit=20')).then(r => r.ok ? r.json() : null),
           fetch(apiUrl('/system/health')).then(r => r.ok ? r.json() : null),
           fetch(apiUrl('/system/storage-report')).then(r => r.ok ? r.json() : null),
         ]);
-        setCameras(c);
-        setEvents(e);
+        if (Array.isArray(c) && c.length > 0) setCameras(c);
+        else if (Array.isArray(c)) setCameras(prev => (prev.length > 0 ? prev : c));
+        if (Array.isArray(e)) setEvents(e);
         if (s) setRecordingStorage(s);
-        if (h && h.storage) {
-          setStorage(h.storage);
-          setSystemStats({
-            cpu: typeof h.cpu_usage_percent === 'number' ? h.cpu_usage_percent.toFixed(1) : '--',
-            up: typeof h.network?.up_mbps === 'number' ? h.network.up_mbps.toFixed(2) : '0.00',
-            down: typeof h.network?.down_mbps === 'number' ? h.network.down_mbps.toFixed(2) : '0.00',
+        if (h) {
+          if (h.storage) setStorage(h.storage);
+          setSystemStats(prev => ({
+            cpu: typeof h.cpu_usage_percent === 'number' ? h.cpu_usage_percent.toFixed(1) : prev.cpu,
+            up: typeof h.network?.up_mbps === 'number' ? h.network.up_mbps.toFixed(2) : prev.up,
+            down: typeof h.network?.down_mbps === 'number' ? h.network.down_mbps.toFixed(2) : prev.down,
             latency: `${Math.round(performance.now() - started)}`,
             network: h.status === 'online' ? 'OK' : 'DEGRADED',
-            codec: h.record_codec || '--',
-          });
+            codec: h.record_codec || prev.codec,
+          }));
         }
       } catch {}
     };
+
+    // Immediately trigger REST hydration on mount
+    load();
+    const pollInterval = window.setInterval(load, 10000);
 
     let eventsSource: EventSource | null = null;
     let reconnectTimeout: number | undefined;
@@ -118,19 +130,10 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
         if (!sseActive) return;
         try { eventsSource?.close(); } catch {}
         load();
-        if (!fallbackTimer) {
-          fallbackTimer = window.setInterval(load, 15000);
-        }
         window.clearTimeout(reconnectTimeout);
         reconnectTimeout = window.setTimeout(() => {
           if (sseActive) connectSSE();
         }, 5000);
-      };
-      eventsSource.onopen = () => {
-        if (fallbackTimer) {
-          window.clearInterval(fallbackTimer);
-          fallbackTimer = undefined;
-        }
       };
     };
 
@@ -138,11 +141,11 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
 
     return () => {
       sseActive = false;
+      window.clearInterval(pollInterval);
       window.clearTimeout(reconnectTimeout);
       if (eventsSource) {
         try { eventsSource.close(); } catch {}
       }
-      if (fallbackTimer) window.clearInterval(fallbackTimer);
     };
   }, []);
 
