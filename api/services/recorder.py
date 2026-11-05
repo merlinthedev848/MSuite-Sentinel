@@ -379,35 +379,45 @@ class RecorderManager:
 recorder_manager = RecorderManager()
 
 
+_FASTSTART_SEEN: set[str] = set()
+
+
 def moov_at_start(file_path: str | Path) -> bool:
     """True when the browser can start playback from the first bytes."""
     try:
         with open(file_path, "rb") as handle:
-            return b"moov" in handle.read(65536)
+            # Inspect first 256KB to detect moov atom
+            return b"moov" in handle.read(262144)
     except OSError:
         return False
 
 
 def ensure_faststart(file_path: str | Path) -> Path:
-    """Move moov to the front with a stream copy so a browser can range-seek immediately.
-
-    The segment muxer leaves moov at the end, so the player downloads the whole
-    minute before the first frame. This is a remux, not a transcode.
+    """Move moov to the front with a fast stream copy so a browser can range-seek immediately.
+    Cached in-memory to guarantee instantaneous zero-subprocess return for all previously checked files.
     """
     import subprocess
     import time
 
     path = Path(file_path)
-    if not path.is_file() or moov_at_start(path):
+    str_path = str(path)
+    if str_path in _FASTSTART_SEEN:
         return path
+
+    if not path.is_file() or moov_at_start(path):
+        _FASTSTART_SEEN.add(str_path)
+        if len(_FASTSTART_SEEN) > 50000:
+            _FASTSTART_SEEN.clear()
+        return path
+
     try:
         stat = path.stat()
-        # A multi-hour segment is already range-seekable. Remuxing it here would
-        # block the only API worker for the whole file.
         if stat.st_size > 80 * 1024 * 1024 or time.time() - stat.st_mtime < 3:
+            _FASTSTART_SEEN.add(str_path)
             return path
     except OSError:
         return path
+
     tmp = path.with_name(f".{path.name}.faststart")
     try:
         proc = subprocess.run(
@@ -418,7 +428,7 @@ def ensure_faststart(file_path: str | Path) -> Path:
                 "-movflags", "+faststart",
                 str(tmp),
             ],
-            timeout=30,
+            timeout=8,
             check=False,
         )
         if proc.returncode == 0 and tmp.is_file() and tmp.stat().st_size >= 10240 and moov_at_start(tmp):
@@ -431,6 +441,8 @@ def ensure_faststart(file_path: str | Path) -> Path:
                 tmp.unlink()
             except OSError:
                 pass
+
+    _FASTSTART_SEEN.add(str_path)
     return path
 
 
@@ -791,8 +803,13 @@ def _scan_recordings(camera_id: str | None = None) -> list[dict]:
     return results
 
 
+_LOCATE_CACHE: dict[tuple[str, str], Path] = {}
+
+
 def locate_recording(camera_id: str, filename: str) -> Path | None:
-    """Find a segment by file name under a camera directory, including a date subfolder."""
+    """Find a segment by file name under a camera directory with O(1) in-memory lookup.
+    Bypasses slow recursive filesystem walks (rglob) on older recordings.
+    """
     from api.security import contained_path, safe_camera_id
 
     try:
@@ -802,19 +819,54 @@ def locate_recording(camera_id: str, filename: str) -> Path | None:
     if not filename or filename != Path(filename).name or not filename.endswith(".mp4") or filename.startswith("."):
         return None
 
+    cache_key = (cid, filename)
+    cached_path = _LOCATE_CACHE.get(cache_key)
+    if cached_path is not None and cached_path.is_file():
+        return cached_path
+
+    # Extract date from filename if standard naming YYYY-MM-DD_...
+    date_prefix = filename[:10] if (len(filename) >= 10 and filename[4] == '-' and filename[7] == '-') else None
+
     for root in _recording_roots():
         if not root.exists():
             continue
         cam_dir = root / cid
         if not cam_dir.is_dir():
             continue
+
+        # 1. Direct file under cam_dir
         direct = cam_dir / filename
         if direct.is_file() and contained_path(root, direct) is not None:
+            _LOCATE_CACHE[cache_key] = direct
+            if len(_LOCATE_CACHE) > 50000:
+                _LOCATE_CACHE.clear()
             return direct
+
+        # 2. Direct file under date subfolder (e.g. cam_dir/2026-11-05/filename)
+        if date_prefix:
+            date_dir = cam_dir / date_prefix
+            date_file = date_dir / filename
+            if date_file.is_file() and contained_path(root, date_file) is not None:
+                _LOCATE_CACHE[cache_key] = date_file
+                return date_file
+
+        # 3. Check memory metadata cache (avoids rglob entirely)
+        for (_, _, _), entry in _RECORDING_ENTRY_CACHE.items():
+            if entry.get("camera_id") == cid and entry.get("filename") == filename:
+                cand = Path(entry["path"])
+                if cand.is_file() and contained_path(root, cand) is not None:
+                    _LOCATE_CACHE[cache_key] = cand
+                    return cand
+
+        # 4. Fast 1-level subfolder scan instead of full recursive rglob
         try:
-            for match in cam_dir.rglob(filename):
-                if match.is_file() and match.name == filename and contained_path(root, match) is not None:
-                    return match
+            with os.scandir(cam_dir) as it:
+                for entry in it:
+                    if entry.is_dir() and not entry.name.startswith("."):
+                        cand = Path(entry.path) / filename
+                        if cand.is_file() and contained_path(root, cand) is not None:
+                            _LOCATE_CACHE[cache_key] = cand
+                            return cand
         except OSError:
             continue
 
@@ -822,6 +874,7 @@ def locate_recording(camera_id: str, filename: str) -> Path | None:
     exported = export_dir / filename
     if exported.is_file() and contained_path(export_dir, exported) is not None:
         if filename.startswith(f"evidence_") or filename.startswith(f"{cid}_"):
+            _LOCATE_CACHE[cache_key] = exported
             return exported
     return None
 

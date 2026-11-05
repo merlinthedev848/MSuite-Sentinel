@@ -63,12 +63,19 @@ const edgeFile = (cameraId: string, piece: EdgePiece): RecordingFile => ({
 const fetchEdgeSegments = async (cameraId: string, dayMs: number): Promise<EdgeSegment[]> => {
   const start = new Date(dayMs).toISOString();
   const end = new Date(dayMs + 24 * 3600 * 1000).toISOString();
-  const res = await fetch(apiUrl(
-    `/recordings-list/edge?camera_id=${encodeURIComponent(cameraId)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
-  ));
-  if (!res.ok) return [];
-  const body = await res.json().catch(() => null);
-  return Array.isArray(body?.segments) ? body.segments : [];
+  try {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(apiUrl(
+      `/recordings-list/edge?camera_id=${encodeURIComponent(cameraId)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    ), { signal: controller.signal });
+    window.clearTimeout(timeout);
+    if (!res.ok) return [];
+    const body = await res.json().catch(() => null);
+    return Array.isArray(body?.segments) ? body.segments : [];
+  } catch {
+    return [];
+  }
 };
 
 interface CameraEvent {
@@ -457,18 +464,18 @@ const Playback: React.FC = () => {
   const positionSec = () => timeBaseRef.current + (videoRef.current?.currentTime || 0);
 
   const openClip = (file: RecordingFile, offsetSec: number) => {
-    const offset = Math.max(0, offsetSec);
+    const durationLimit = Number(file.duration_seconds) || ((file.segmentMs || 60000) / 1000);
+    const safeOffset = Math.max(0, Math.min(offsetSec, Math.max(0, durationLimit - 0.25)));
     const video = videoRef.current;
     const sameFile = !file.edge && activeFile?.url === file.url && video;
     if (file.edge) {
-      // The stream already starts at this offset. Media time 0 is that instant.
-      timeBaseRef.current = offset;
+      timeBaseRef.current = safeOffset;
       pendingSeek.current = null;
     } else {
       timeBaseRef.current = 0;
-      pendingSeek.current = offset;
+      pendingSeek.current = safeOffset;
     }
-    const targetSeekMs = file.startTimestamp + offset * 1000;
+    const targetSeekMs = file.startTimestamp + safeOffset * 1000;
     setCurrentTimeMs(targetSeekMs);
     setVideoError('');
     setBuffering(true);
@@ -482,14 +489,14 @@ const Playback: React.FC = () => {
     }
     if (sameFile && video) {
       const duration = video.duration;
-      if (Number.isFinite(duration) && duration > 1 && offset <= duration + 0.25) {
-        video.currentTime = Math.min(offset, Math.max(0, duration - 0.25));
+      if (Number.isFinite(duration) && duration > 1 && safeOffset <= duration + 0.25) {
+        video.currentTime = Math.min(safeOffset, Math.max(0, duration - 0.25));
         return;
       }
     }
     retryCountRef.current = 0;
     setActiveFile(file);
-    setClipOffset(offset);
+    setClipOffset(safeOffset);
   };
 
   const seekToTime = async (targetTimeMs: number, findNearest: boolean = false) => {
@@ -966,7 +973,7 @@ const Playback: React.FC = () => {
 
               <video
                 ref={videoRef}
-                key={`${activeFile.url}@${clipOffset.toFixed(3)}@${retryNonce}`}
+                key={`${activeFile.url}@${retryNonce}`}
                 src={withStart(activeFile.url, clipOffset)}
                 autoPlay
                 playsInline

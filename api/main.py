@@ -673,19 +673,28 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
                 },
             )
 
-    from api.services.recorder import ensure_faststart
-    fp = await asyncio.to_thread(ensure_faststart, fp)
-    file_size = fp.stat().st_size
-
     is_download = (
         "/export/" in request.url.path or 
         request.query_params.get("download") in ("1", "true", "yes")
     )
+    range_header = request.headers.get("range")
+
+    # Range playback requests stream immediately without blocking the client on an FFmpeg remux.
+    if range_header:
+        from api.services.recorder import moov_at_start, _FASTSTART_SEEN, ensure_faststart
+        if str(fp) not in _FASTSTART_SEEN:
+            if not moov_at_start(fp):
+                asyncio.create_task(asyncio.to_thread(ensure_faststart, fp))
+            else:
+                _FASTSTART_SEEN.add(str(fp))
+    else:
+        from api.services.recorder import ensure_faststart
+        fp = await asyncio.to_thread(ensure_faststart, fp)
+        file_size = fp.stat().st_size
+
     resp_headers = {"Accept-Ranges": "bytes"}
     if is_download:
-        resp_headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-
-    range_header = request.headers.get("range")
+        resp_headers["Content-Disposition"] = f'attachment; filename="{filename}"' 
     if range_header:
         start = 0
         end = file_size - 1

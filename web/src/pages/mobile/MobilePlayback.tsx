@@ -67,12 +67,19 @@ const edgeFile = (cameraId: string, piece: EdgePiece): RecordingFile => ({
 const fetchEdgeSegments = async (cameraId: string, dayMs: number): Promise<EdgeSegment[]> => {
   const start = new Date(dayMs).toISOString();
   const end = new Date(dayMs + 24 * 3600 * 1000).toISOString();
-  const res = await fetch(apiUrl(
-    `/recordings-list/edge?camera_id=${encodeURIComponent(cameraId)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
-  ));
-  if (!res.ok) return [];
-  const body = await res.json().catch(() => null);
-  return Array.isArray(body?.segments) ? body.segments : [];
+  try {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(apiUrl(
+      `/recordings-list/edge?camera_id=${encodeURIComponent(cameraId)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    ), { signal: controller.signal });
+    window.clearTimeout(timeout);
+    if (!res.ok) return [];
+    const body = await res.json().catch(() => null);
+    return Array.isArray(body?.segments) ? body.segments : [];
+  } catch {
+    return [];
+  }
 };
 
 interface MobilePlaybackProps {
@@ -556,7 +563,7 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
           {activeFile ? (
             <video
               ref={videoRef}
-              key={`${activeFile.url}@${clipOffset.toFixed(2)}`}
+              key={activeFile.url}
               src={withStart(activeFile.url, clipOffset)}
               playsInline
               autoPlay
