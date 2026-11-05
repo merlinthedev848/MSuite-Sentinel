@@ -2,9 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { 
   Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward, 
-  Search, Video, Download, Maximize2 
+  Search, Video, Download, Maximize2, Minimize2 
 } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
+import { requestNativeFullscreen, exitNativeFullscreen, isNativeFullscreenActive, addFullscreenChangeListener } from '../lib/fullscreen';
 import { edgePieces, resolveLoadedSeek, resolvePlaybackTarget, timelineMs, uncoveredDays, type EdgePiece, type EdgeSegment } from '../lib/playbackSeek';
 
 const inputDate = (date: Date) => {
@@ -142,6 +143,7 @@ const Playback: React.FC = () => {
   const hasDraggedRef = useRef(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const playerContainerRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const pendingSeek = useRef<number | null>(null);
   const timeBaseRef = useRef(0);
@@ -150,6 +152,46 @@ const Playback: React.FC = () => {
   const recordingsRef = useRef<RecordingFile[]>([]);
   const edgeJobsRef = useRef<Map<string, Promise<EdgeSegment[]>>>(new Map());
   const seekGen = useRef(0);
+
+  const [isTheaterFullscreen, setIsTheaterFullscreen] = useState(false);
+  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
+
+  useEffect(() => {
+    const unsub = addFullscreenChangeListener((active) => {
+      setIsNativeFullscreen(active);
+      if (!active) {
+        setIsTheaterFullscreen(false);
+      }
+    });
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isTheaterFullscreen) {
+        setIsTheaterFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      unsub();
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isTheaterFullscreen]);
+
+  const handleToggleFullscreen = async () => {
+    if (isNativeFullscreenActive() || isTheaterFullscreen) {
+      if (isNativeFullscreenActive()) {
+        await exitNativeFullscreen();
+      }
+      setIsTheaterFullscreen(false);
+      return;
+    }
+
+    const container = playerContainerRef.current;
+    const video = videoRef.current;
+
+    const ok = await requestNativeFullscreen(container, video);
+    if (!ok) {
+      setIsTheaterFullscreen(true);
+    }
+  };
 
   const showVideoMessage = (msg: string, durationMs: number = 4000) => {
     setVideoError(msg);
@@ -846,7 +888,12 @@ const Playback: React.FC = () => {
       {/* ── Right Content Area ── */}
       <div className="playback-main">
         {/* Video Player */}
-        <div className="playback-video-container">
+        <div ref={playerContainerRef} className={`playback-video-container${isTheaterFullscreen ? ' theater-fullscreen' : ''}`}>
+          {isTheaterFullscreen && (
+            <button className="theater-exit-btn" onClick={handleToggleFullscreen} title="Exit Fullscreen (Esc)">
+              <Minimize2 size={15} /> Exit Fullscreen
+            </button>
+          )}
           {activeFile ? (
             <>
               {/* Top Custom Metadata Text Overlay */}
@@ -965,10 +1012,11 @@ const Playback: React.FC = () => {
 
 
                   <button 
-                    style={{ background: 'transparent', border: 'none', color: 'var(--t2)', cursor: 'pointer', padding: 4 }}
-                    onClick={() => videoRef.current?.requestFullscreen()}
+                    style={{ background: 'transparent', border: 'none', color: (isTheaterFullscreen || isNativeFullscreen) ? 'var(--cyan)' : 'var(--t2)', cursor: 'pointer', padding: 4 }}
+                    onClick={handleToggleFullscreen}
+                    title={isTheaterFullscreen || isNativeFullscreen ? "Exit Fullscreen" : "Fullscreen"}
                   >
-                    <Maximize2 size={16} />
+                    {isTheaterFullscreen || isNativeFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                   </button>
                 </div>
               </div>

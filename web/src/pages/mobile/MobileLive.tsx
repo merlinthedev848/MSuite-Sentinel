@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Camera, Volume2, VolumeX, PlaySquare, RefreshCw, Download, Search } from 'lucide-react';
+import { Camera, Volume2, VolumeX, PlaySquare, RefreshCw, Download, Search, Maximize2, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import LivePlayer from '../../components/LivePlayer';
 import { apiUrl } from '../../lib/endpoints';
 
@@ -29,6 +29,7 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [capturingCamId, setCapturingCamId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [fullViewCamId, setFullViewCamId] = useState<string | null>(null);
 
   const toggleMute = (camId: string) => {
     setMutedStates(prev => ({ ...prev, [camId]: !(prev[camId] ?? true) }));
@@ -86,8 +87,117 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
     );
   }
 
+  const activeFullViewCam = fullViewCamId ? cameras.find(c => c.id === fullViewCamId) : null;
+  const activeCamIndex = activeFullViewCam ? filteredCameras.findIndex(c => c.id === activeFullViewCam.id) : -1;
+  const prevCam = activeCamIndex > 0 ? filteredCameras[activeCamIndex - 1] : filteredCameras[filteredCameras.length - 1];
+  const nextCam = activeCamIndex >= 0 && activeCamIndex < filteredCameras.length - 1 ? filteredCameras[activeCamIndex + 1] : filteredCameras[0];
+
   return (
     <div>
+      {/* ── Dedicated Mobile Full View Modal ── */}
+      {activeFullViewCam && (
+        <div className="mobile-live-fullview-modal">
+          {/* Header */}
+          <div className="mobile-fullview-header">
+            <div className="mobile-fullview-title">
+              <span className={`mobile-dot ${activeFullViewCam.status !== 'offline' ? 'online' : ''}`} />
+              <span>{activeFullViewCam.name}</span>
+              <span style={{ fontSize: '0.65rem', padding: '2px 6px', borderRadius: 4, background: 'rgba(0,210,255,0.15)', color: 'var(--mobile-accent)' }}>
+                {qualities[activeFullViewCam.id]?.toUpperCase() || 'MAIN'}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                className="mobile-ctrl-btn"
+                onClick={() => setQuality(activeFullViewCam.id, qualities[activeFullViewCam.id] === 'sub' ? 'main' : 'sub')}
+                style={{ padding: '4px 8px', fontSize: '0.72rem' }}
+              >
+                {qualities[activeFullViewCam.id] === 'sub' ? 'Switch to HD' : 'Switch to Sub'}
+              </button>
+              <button
+                className="mobile-ctrl-btn"
+                onClick={() => setFullViewCamId(null)}
+                title="Close Full View"
+                style={{ padding: '6px 10px', borderRadius: '50%' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+
+          {/* Full View Video Body */}
+          <div className="mobile-fullview-body">
+            <LivePlayer
+              cameraId={activeFullViewCam.id}
+              quality={qualities[activeFullViewCam.id] || 'main'}
+              muted={mutedStates[activeFullViewCam.id] ?? true}
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+            />
+          </div>
+
+          {/* Full View Footer Controls */}
+          <div className="mobile-fullview-footer">
+            <div className="mobile-fullview-actions">
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  className="mobile-ctrl-btn"
+                  onClick={() => toggleMute(activeFullViewCam.id)}
+                  title={mutedStates[activeFullViewCam.id] ? 'Unmute live audio' : 'Mute live audio'}
+                  style={{ color: !(mutedStates[activeFullViewCam.id] ?? true) ? 'var(--mobile-accent)' : 'inherit' }}
+                >
+                  {!(mutedStates[activeFullViewCam.id] ?? true) ? <Volume2 size={16} color="var(--mobile-accent)" /> : <VolumeX size={16} />}
+                  {!(mutedStates[activeFullViewCam.id] ?? true) ? 'Audio ON' : 'Unmute'}
+                </button>
+                <button
+                  className="mobile-ctrl-btn"
+                  onClick={() => handleCaptureSnapshot(activeFullViewCam.id, activeFullViewCam.name)}
+                  disabled={capturingCamId === activeFullViewCam.id}
+                >
+                  {capturingCamId === activeFullViewCam.id ? <div className="spinner" style={{ width: 14, height: 14 }} /> : <Download size={15} />}
+                  Snapshot
+                </button>
+              </div>
+
+              <button
+                className="mobile-ctrl-btn"
+                onClick={() => {
+                  setFullViewCamId(null);
+                  onSelectCameraForPlayback(activeFullViewCam.id);
+                }}
+                style={{ color: 'var(--mobile-accent)', borderColor: 'rgba(0, 210, 255, 0.3)' }}
+              >
+                <PlaySquare size={15} /> Playback
+              </button>
+            </div>
+
+            {/* Quick Camera Switcher Bar */}
+            {filteredCameras.length > 1 && prevCam && nextCam && (
+              <div className="mobile-fullview-cams-switcher">
+                <button
+                  className="mobile-ctrl-btn"
+                  onClick={() => setFullViewCamId(prevCam.id)}
+                  style={{ fontSize: '0.72rem', padding: '4px 10px' }}
+                >
+                  <ChevronLeft size={14} /> {prevCam.name}
+                </button>
+                <span style={{ fontSize: '0.72rem', color: 'var(--mobile-text-muted)' }}>
+                  {activeCamIndex + 1} of {filteredCameras.length}
+                </span>
+                <button
+                  className="mobile-ctrl-btn"
+                  onClick={() => setFullViewCamId(nextCam.id)}
+                  style={{ fontSize: '0.72rem', padding: '4px 10px' }}
+                >
+                  {nextCam.name} <ChevronRight size={14} />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Camera Feeds List ── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontSize: '0.8rem', color: 'var(--mobile-text-muted)', fontWeight: 600 }}>
           {filteredCameras.length} {filteredCameras.length === 1 ? 'Camera' : 'Cameras'} Streaming
@@ -162,16 +272,24 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
                 >
                   {quality.toUpperCase()}
                 </button>
-                {cam.resolution && (
-                  <span style={{ fontSize: '0.65rem', color: 'var(--mobile-text-muted)', fontFamily: 'monospace' }}>
-                    {cam.resolution}
-                  </span>
-                )}
+                <button
+                  className="mobile-ctrl-btn"
+                  onClick={() => setFullViewCamId(cam.id)}
+                  style={{ padding: '2px 8px', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                  title="Expand to Full View"
+                >
+                  <Maximize2 size={12} /> Full View
+                </button>
               </div>
             </div>
 
-            {/* Video Feed Body */}
-            <div className="mobile-live-card-body">
+            {/* Video Feed Body (Click to expand) */}
+            <div 
+              className="mobile-live-card-body" 
+              onClick={() => setFullViewCamId(cam.id)}
+              style={{ cursor: 'pointer' }}
+              title="Click for full view"
+            >
               <LivePlayer
                 cameraId={cam.id}
                 quality={quality}
@@ -201,6 +319,14 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
               </div>
 
               <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  className="mobile-ctrl-btn"
+                  onClick={() => setFullViewCamId(cam.id)}
+                  title="Full View"
+                  style={{ color: 'var(--mobile-accent)' }}
+                >
+                  <Maximize2 size={14} /> Full View
+                </button>
                 <button
                   className="mobile-ctrl-btn"
                   onClick={() => onSelectCameraForPlayback(cam.id)}

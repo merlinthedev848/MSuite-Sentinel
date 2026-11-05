@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Pause, RotateCcw, RotateCw,
-  Maximize, Film, Shield, Download, X, CheckCircle, FileVideo
+  Maximize, Minimize, Film, Shield, Download, X, CheckCircle, FileVideo
 } from 'lucide-react';
 import { apiUrl } from '../../lib/endpoints';
+import { requestNativeFullscreen, exitNativeFullscreen, isNativeFullscreenActive, addFullscreenChangeListener } from '../../lib/fullscreen';
 import { 
   resolvePlaybackTarget, resolveLoadedSeek, edgePieces,
   type EdgePiece, type EdgeSegment 
@@ -347,14 +348,43 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
     }
   };
 
-  const handleFullscreen = () => {
-    const el = containerRef.current || videoRef.current;
-    if (!el) return;
-    if (!document.fullscreenElement) {
-      if (el.requestFullscreen) el.requestFullscreen();
-      else if ((el as any).webkitRequestFullscreen) (el as any).webkitRequestFullscreen();
-    } else {
-      if (document.exitFullscreen) document.exitFullscreen();
+  const [isTheaterFullscreen, setIsTheaterFullscreen] = useState(false);
+  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
+
+  useEffect(() => {
+    const unsub = addFullscreenChangeListener((active) => {
+      setIsNativeFullscreen(active);
+      if (!active) {
+        setIsTheaterFullscreen(false);
+      }
+    });
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isTheaterFullscreen) {
+        setIsTheaterFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      unsub();
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isTheaterFullscreen]);
+
+  const handleFullscreen = async () => {
+    if (isNativeFullscreenActive() || isTheaterFullscreen) {
+      if (isNativeFullscreenActive()) {
+        await exitNativeFullscreen();
+      }
+      setIsTheaterFullscreen(false);
+      return;
+    }
+
+    const el = containerRef.current;
+    const video = videoRef.current;
+
+    const ok = await requestNativeFullscreen(el, video);
+    if (!ok) {
+      setIsTheaterFullscreen(true);
     }
   };
 
@@ -506,7 +536,12 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
       </div>
 
       {/* ── 2. Video Player Card ── */}
-      <div className="mobile-player-card" ref={containerRef}>
+      <div className={`mobile-player-card${isTheaterFullscreen ? ' theater-fullscreen' : ''}`} ref={containerRef}>
+        {isTheaterFullscreen && (
+          <button className="mobile-theater-exit-btn" onClick={handleFullscreen} title="Exit Fullscreen">
+            <Minimize size={14} /> Exit Fullscreen
+          </button>
+        )}
         <div className="mobile-player-container" onClick={handlePlayPause}>
           {/* Top HUD: Camera Name and Live Playback Clock */}
           <div className="mobile-player-hud-top">
@@ -627,8 +662,8 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
             <button className="mobile-ctrl-btn" onClick={handleCycleSpeed}>
               {speeds[speedIndex]}x
             </button>
-            <button className="mobile-ctrl-btn" onClick={handleFullscreen}>
-              <Maximize size={15} />
+            <button className="mobile-ctrl-btn" onClick={handleFullscreen} title={isTheaterFullscreen || isNativeFullscreen ? "Exit Fullscreen" : "Fullscreen"}>
+              {isTheaterFullscreen || isNativeFullscreen ? <Minimize size={15} color="var(--mobile-accent)" /> : <Maximize size={15} />}
             </button>
           </div>
         </div>

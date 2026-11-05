@@ -5,14 +5,18 @@ import {
   ExternalLink,
   Focus,
   Maximize2,
+  Minimize2,
   Video,
   WifiOff,
   Volume2,
   VolumeX,
   Crosshair,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiUrl } from '../lib/endpoints';
+import { requestNativeFullscreen, exitNativeFullscreen, isNativeFullscreenActive } from '../lib/fullscreen';
 import { resolvePlaybackTarget } from '../lib/playbackSeek';
 import PTZControls from '../components/PTZControls';
 import LivePlayer, { LiveMode } from '../components/LivePlayer';
@@ -109,13 +113,12 @@ const CameraFeedComponent = React.memo<{
   const panStart = useRef({ x: 0, y: 0 });
 
   // 1. Fullscreen
-  const handleFullscreen = () => {
-    if (containerRef.current) {
-      if (containerRef.current.requestFullscreen) {
-        containerRef.current.requestFullscreen();
-      } else if ((containerRef.current as any).webkitRequestFullscreen) {
-        (containerRef.current as any).webkitRequestFullscreen();
-      }
+  const handleFullscreen = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isNativeFullscreenActive()) {
+      await exitNativeFullscreen();
+    } else {
+      await requestNativeFullscreen(containerRef.current, videoRef.current);
     }
   };
 
@@ -193,7 +196,8 @@ const CameraFeedComponent = React.memo<{
   return (
     <div 
       ref={containerRef}
-      className={`cam-cell${cam.has_motion || analytics ? ' has-motion' : ''}`}
+      className={`cam-cell${cam.has_motion || analytics ? ' has-motion' : ''}${maximized ? ' is-maximized' : ''}`}
+      onDoubleClick={onMaximize}
       onWheel={handleZoomWheel}
       onMouseDown={handleZoomMouseDown}
       onMouseMove={handleZoomMouseMove}
@@ -327,22 +331,23 @@ const CameraFeedComponent = React.memo<{
           <CamIcon size={12} />
         </button>
 
-        {/* Maximize in Grid */}
+        {/* Maximize / Restore Grid */}
         <button 
           className="cam-btn" 
-          onClick={onMaximize} 
-          title="Maximize in Grid"
+          onClick={(e) => { e.stopPropagation(); onMaximize?.(); }} 
+          title={maximized ? "Restore Grid" : "Full View (Double-click)"}
+          style={{ color: maximized ? 'var(--cyan)' : 'inherit' }}
         >
-          <Maximize2 size={12} />
+          {maximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
         </button>
 
-        {/* Fullscreen Mode */}
+        {/* Native Fullscreen Mode */}
         <button 
           className="cam-btn" 
           onClick={handleFullscreen} 
-          title="Fullscreen"
+          title="Native Browser Fullscreen"
         >
-          <Maximize2 size={12} />
+          <ExternalLink size={12} />
         </button>
 
         {(liveMode === 'mse' || liveMode === 'mjpeg') && (
@@ -439,6 +444,21 @@ const LiveView: React.FC = () => {
     }
     return rotated.filter(Boolean);
   }, [cameras, maximizedId, layout, patrolMode, patrolOffset]);
+
+  const activeMaxCam = maximizedId ? cameras.find(c => c.id === maximizedId) : null;
+  const maxCamIndex = activeMaxCam ? cameras.findIndex(c => c.id === activeMaxCam.id) : -1;
+  const prevMaxCam = maxCamIndex > 0 ? cameras[maxCamIndex - 1] : cameras[cameras.length - 1];
+  const nextMaxCam = maxCamIndex >= 0 && maxCamIndex < cameras.length - 1 ? cameras[maxCamIndex + 1] : cameras[0];
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && maximizedId) {
+        setMaximizedId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [maximizedId]);
 
   const onlineCams = cameras.filter(c => c.status !== 'offline').length;
   const gridClass = maximizedId || layout === 1 ? 'g1' : layout === 4 ? 'g4' : 'g9';
@@ -541,6 +561,17 @@ const LiveView: React.FC = () => {
                 <GridIcon n={n} />
               </button>
             ))}
+            <button
+              className="layout-btn"
+              title="Fullscreen Monitor Grid"
+              onClick={() => {
+                const el = document.querySelector('.cam-grid') as HTMLElement;
+                if (el) requestNativeFullscreen(el);
+              }}
+              style={{ fontSize: '0.7rem', display: 'flex', gap: 4, alignItems: 'center', padding: '0 8px' }}
+            >
+              <Maximize2 size={12} /> Fullscreen
+            </button>
           </div>
         </div>
       </div>
@@ -621,17 +652,73 @@ const LiveView: React.FC = () => {
               <div className="empty-sub">Go to Settings to add cameras manually or auto-discover ONVIF devices.</div>
             </div>
           ) : (
-            <div className={`cam-grid ${gridClass}`} style={{ minHeight: 0 }}>
-              {visibleCameras.map(cam => (
-                <CameraFeed
-                  key={cam.id}
-                  cam={cam}
-                  paused={livePaused}
-                  analytics={viewMode === 'analytics'}
-                  maximized={maximizedId === cam.id}
-                  onMaximize={() => setMaximizedId(prev => prev === cam.id ? null : cam.id)}
-                />
-              ))}
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              {maximizedId && activeMaxCam && (
+                <div className="cam-maximized-banner">
+                  <div className="cam-maximized-title">
+                    <button 
+                      className="btn btn-primary"
+                      style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 6 }}
+                      onClick={() => setMaximizedId(null)}
+                    >
+                      <Minimize2 size={13} /> Return to Multi-Grid (Esc)
+                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8 }}>
+                      <div className={`dot ${activeMaxCam.status !== 'offline' ? 'online' : 'offline'}`} />
+                      <span>{activeMaxCam.name}</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--cyan)', border: '1px solid var(--cyan-border)', padding: '1px 6px', borderRadius: 4 }}>
+                        {activeMaxCam.resolution || 'HD Main'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {cameras.length > 1 && prevMaxCam && nextMaxCam && (
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button 
+                          className="layout-btn"
+                          onClick={() => setMaximizedId(prevMaxCam.id)}
+                          title={`Previous: ${prevMaxCam.name}`}
+                          style={{ fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                        >
+                          <ChevronLeft size={13} /> {prevMaxCam.name}
+                        </button>
+                        <button 
+                          className="layout-btn"
+                          onClick={() => setMaximizedId(nextMaxCam.id)}
+                          title={`Next: ${nextMaxCam.name}`}
+                          style={{ fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                        >
+                          {nextMaxCam.name} <ChevronRight size={13} />
+                        </button>
+                      </div>
+                    )}
+                    <button 
+                      className="layout-btn"
+                      onClick={() => {
+                        const el = document.querySelector('.cam-cell.is-maximized') as HTMLElement;
+                        if (el) requestNativeFullscreen(el);
+                      }}
+                      title="Fullscreen Camera"
+                      style={{ fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <Maximize2 size={12} /> Fullscreen
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className={`cam-grid ${gridClass}`} style={{ flex: 1, minHeight: 0 }}>
+                {visibleCameras.map(cam => (
+                  <CameraFeed
+                    key={cam.id}
+                    cam={cam}
+                    paused={livePaused}
+                    analytics={viewMode === 'analytics'}
+                    maximized={maximizedId === cam.id}
+                    onMaximize={() => setMaximizedId(prev => prev === cam.id ? null : cam.id)}
+                  />
+                ))}
+              </div>
             </div>
           )}
           {viewMode === 'analytics' && (
