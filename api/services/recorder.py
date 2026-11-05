@@ -226,16 +226,11 @@ _STREAM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$")
 
 
 def browser_stream_sources(name: str, rtsp_url: str) -> list[str]:
-    """RTSP copy, plus an H.264 track for the browser when the name is a stream id.
-
-    Chrome plays H.264 in MediaSource and does not play this camera's HEVC.
-    The extra source is only started when the copy has no H.264, so an H.264
-    camera is not transcoded. The ffmpeg source names the stream; it does not
-    repeat the camera password.
-    """
+    """RTSP copy, plus an H.264 track and AAC audio transcoding track for the browser."""
     sources = [rtsp_url]
     if name and _STREAM_NAME.fullmatch(name):
         sources.append(f"ffmpeg:{name}#video=h264")
+        sources.append(f"ffmpeg:{name}#audio=aac")
     return sources
 
 

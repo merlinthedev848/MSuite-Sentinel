@@ -23,14 +23,29 @@ const assignRef = (ref: React.Ref<HTMLVideoElement | null> | undefined, node: HT
 // H.265 is omitted on purpose: Chrome cannot play it, and the server adds
 // an H.264 track for cameras that only offer HEVC.
 const mseCodecOffer = () => {
-  const codecs = ['avc1.640029', 'mp4a.40.2'];
-  return codecs.filter((codec) => {
+  const videoCodecs = ['avc1.640029', 'avc1.42e01f', 'avc1.4d401f'];
+  const audioCodecs = ['mp4a.40.2', 'opus'];
+
+  const supportedVideo = videoCodecs.filter((codec) => {
     try {
       return MediaSource.isTypeSupported(`video/mp4; codecs="${codec}"`);
     } catch {
       return false;
     }
-  }).join(',');
+  });
+
+  const supportedAudio = audioCodecs.filter((codec) => {
+    try {
+      return (
+        MediaSource.isTypeSupported(`audio/mp4; codecs="${codec}"`) ||
+        MediaSource.isTypeSupported(`video/mp4; codecs="avc1.640029,${codec}"`)
+      );
+    } catch {
+      return false;
+    }
+  });
+
+  return [...supportedVideo, ...supportedAudio].join(',');
 };
 
 const liveSocketUrl = (src: string) => {
@@ -63,6 +78,17 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
   useEffect(() => {
     onMode?.(mode);
   }, [mode, onMode]);
+
+  useEffect(() => {
+    const video = localVideo.current;
+    if (video) {
+      video.muted = muted;
+      if (!muted) {
+        video.volume = 1.0;
+        video.play().catch(() => {});
+      }
+    }
+  }, [muted]);
 
   useEffect(() => {
     if (paused) {
