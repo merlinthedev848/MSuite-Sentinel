@@ -228,6 +228,8 @@ async def logout(request: Request):
         samesite="lax",
         httponly=True,
     )
+    # Also delete without secure flag to ensure cleanup on local dev / reverse proxies
+    response.delete_cookie(SESSION_COOKIE, path="/")
     return response
 
 

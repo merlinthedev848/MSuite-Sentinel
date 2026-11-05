@@ -543,13 +543,22 @@ async def factory_reset(
             await db.execute(delete(model))
         except Exception as e:
             print(f"Could not delete from table {getattr(model, '__tablename__', str(model))}: {e}")
+
+    # 4. Invalidate all user sessions so clients are immediately logged out
+    from api.models.user import User
+    from sqlalchemy import update
+    try:
+        await db.execute(update(User).values(token_version=User.token_version + 1))
+    except Exception as e:
+        print(f"Could not bump user token version: {e}")
+
     try:
         await db.commit()
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Database wipe failed: {e}")
 
-    # 4. Reset config file to defaults by rewriting clean configuration
+    # 5. Reset config file to defaults by rewriting clean configuration
     if CONFIG_PATH.is_file():
         try:
             CONFIG_PATH.write_text("# mView Sentinel Configuration\n", encoding="utf-8")

@@ -9,7 +9,7 @@ from sqlalchemy.future import select
 from typing import List
 
 from api.config import settings
-from api.database import get_db
+from api.database import get_db, async_session_maker
 from api.models.camera import Camera
 from api.schemas.camera import CameraResponse, CameraCreate, CameraUpdate, ONVIFDiscoveryResult
 from api.services.onvif_service import onvif_service
@@ -38,17 +38,24 @@ def _present_camera(cam: Camera, user: dict | None) -> dict:
 
 
 def _ignore_masked_updates(data: dict) -> dict:
-    if is_masked_secret(data.get("onvif_password")):
+    pwd = data.get("onvif_password")
+    if pwd is None or pwd == "" or is_masked_secret(pwd):
         data.pop("onvif_password", None)
+    user = data.get("onvif_username")
+    if user is None or user == "":
+        data.pop("onvif_username", None)
     for key in ("rtsp_url_main", "rtsp_url_sub"):
-        if is_masked_rtsp(data.get(key)):
+        val = data.get(key)
+        if val is None or val == "" or is_masked_rtsp(val):
             data.pop(key, None)
     return data
 
 
-async def _refresh_recorder(db: AsyncSession):
-    result = await db.execute(select(Camera))
-    await recorder_manager.sync_cameras(result.scalars().all())
+async def _refresh_recorder() -> None:
+    async with async_session_maker() as session:
+        result = await session.execute(select(Camera))
+        cams = result.scalars().all()
+    await recorder_manager.sync_cameras(cams)
     await local_core.refresh_snapshot()
 
 
@@ -78,10 +85,14 @@ async def create_camera(request: Request, camera: CameraCreate, db: AsyncSession
     _require_settings(request)
     data = camera.model_dump()
     new_cam = Camera(**data)
-    db.add(new_cam)
-    await db.commit()
-    await db.refresh(new_cam)
-    await _refresh_recorder(db)
+    try:
+        db.add(new_cam)
+        await db.commit()
+        await db.refresh(new_cam)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(500, f"Database creation failed: {e}")
+    await _refresh_recorder()
     return _present_camera(new_cam, getattr(request.state, "user", None))
 
 
@@ -92,11 +103,15 @@ async def update_camera(camera_id: str, update: CameraUpdate, request: Request, 
     cam = result.scalar_one_or_none()
     if not cam:
         raise HTTPException(404, "Camera not found")
-    for k, v in _ignore_masked_updates(update.model_dump(exclude_unset=True)).items():
-        setattr(cam, k, v)
-    await db.commit()
-    await db.refresh(cam)
-    await _refresh_recorder(db)
+    try:
+        for k, v in _ignore_masked_updates(update.model_dump(exclude_unset=True)).items():
+            setattr(cam, k, v)
+        await db.commit()
+        await db.refresh(cam)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(500, f"Database update failed: {e}")
+    await _refresh_recorder()
     return _present_camera(cam, getattr(request.state, "user", None))
 
 
@@ -108,18 +123,19 @@ async def delete_camera(camera_id: str, request: Request, db: AsyncSession = Dep
     if not cam:
         raise HTTPException(404, "Camera not found")
     
-    # Cascade delete associated events and reviews to avoid foreign key violations
+    # Cascade delete associated events and reviews in safe subquery
     from sqlalchemy import delete
     from api.models.ai import SemanticEvent
     from api.models.operations import EventReview
-    event_ids = (await db.execute(select(SemanticEvent.id).where(SemanticEvent.camera_id == camera_id))).scalars().all()
-    if event_ids:
-        await db.execute(delete(EventReview).where(EventReview.event_id.in_(event_ids)))
-    await db.execute(delete(SemanticEvent).where(SemanticEvent.camera_id == camera_id))
-
-    # Delete camera record
-    await db.delete(cam)
-    await db.commit()
+    try:
+        subquery = select(SemanticEvent.id).where(SemanticEvent.camera_id == camera_id)
+        await db.execute(delete(EventReview).where(EventReview.event_id.in_(subquery)))
+        await db.execute(delete(SemanticEvent).where(SemanticEvent.camera_id == camera_id))
+        await db.execute(delete(Camera).where(Camera.id == camera_id))
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(500, f"Database deletion failed: {e}")
 
     # Cancel active PTZ tour if running
     if camera_id in _active_tours:
@@ -129,7 +145,7 @@ async def delete_camera(camera_id: str, request: Request, db: AsyncSession = Dep
     # Purge video recording files and stop active streams
     from api.services.recorder import purge_all_recordings
     await asyncio.to_thread(purge_all_recordings, camera_id)
-    await _refresh_recorder(db)
+    await _refresh_recorder()
     return {"status": "deleted"}
 
 
@@ -532,8 +548,12 @@ async def adopt_camera(
         status="online",
         auto_adopted=True,
     )
-    db.add(cam)
-    await db.commit()
-    await db.refresh(cam)
-    await _refresh_recorder(db)
+    try:
+        db.add(cam)
+        await db.commit()
+        await db.refresh(cam)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(500, f"Database adoption failed: {e}")
+    await _refresh_recorder()
     return _present_camera(cam, getattr(request.state, "user", None))

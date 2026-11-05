@@ -240,6 +240,8 @@ const Settings: React.FC = () => {
   const [adoptForm, setAdoptForm] = useState<Record<string, {u: string, p: string}>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [quickRenamingId, setQuickRenamingId] = useState<string | null>(null);
+  const [quickRenameValue, setQuickRenameValue] = useState<string>('');
   const [toast, setToast] = useState('');
   const [systemConfig, setSystemConfig] = useState<SystemConfig>(defaultSystemConfig);
   const [savingConfig, setSavingConfig] = useState(false);
@@ -407,12 +409,14 @@ const Settings: React.FC = () => {
       });
       if (res.ok) {
         showToast('Factory reset complete. Logging out...');
+        try { localStorage.removeItem('mview_token'); } catch {}
         try {
           await fetch(apiUrl('/auth/logout'), { method: 'POST' });
         } catch {}
+        window.dispatchEvent(new Event('sentinel-unauthorized'));
         setTimeout(() => {
           window.location.href = '/';
-        }, 2000);
+        }, 1500);
       } else {
         const err = await res.json().catch(() => ({}));
         showToast(`Factory reset failed: ${err.detail || err.message || `HTTP ${res.status}`}`);
@@ -736,6 +740,27 @@ const Settings: React.FC = () => {
     setDeletingId(null);
   };
 
+  const handleQuickRename = async (id: string) => {
+    if (!quickRenameValue.trim()) return;
+    try {
+      const res = await fetch(apiUrl(`/cameras/${id}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: quickRenameValue.trim() }),
+      });
+      if (res.ok) {
+        showToast('Camera renamed successfully.');
+        setQuickRenamingId(null);
+        await fetchCameras();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(`Failed to rename camera: ${err.detail || 'Unknown error'}`);
+      }
+    } catch {
+      showToast('Network error while renaming camera.');
+    }
+  };
+
   useEffect(() => { fetchCameras(); }, []);
 
   useEffect(() => () => {
@@ -784,29 +809,49 @@ const Settings: React.FC = () => {
     setAdopting(null);
   };
 
-  // ── Manual Add ──────────────────────────────────────────────────
+  // ── Manual Add / Edit ──────────────────────────────────────────
   const addManually = async () => {
     if (!manualForm.name.trim()) { setSaveError('Camera name is required.'); return; }
-    if (!manualForm.rtsp_url_main.trim() && !manualForm.ip.trim()) {
+    if (!editingId && !manualForm.rtsp_url_main.trim() && !manualForm.ip.trim()) {
       setSaveError('Either an RTSP URL or IP address is required.'); return;
     }
     setSavingManual(true);
     setSaveError('');
     try {
-      const body: any = {
-        name: manualForm.name.trim(),
-        rtsp_url_main: restoreMaskedRtspPassword(manualForm.rtsp_url_main.trim(), originalRtsp.main) || `rtsp://${manualForm.onvif_username}:${manualForm.onvif_password}@${manualForm.ip.trim()}:554/stream1`,
-        rtsp_url_sub: restoreMaskedRtspPassword(manualForm.rtsp_url_sub.trim(), originalRtsp.sub) || undefined,
-        onvif_endpoint: manualForm.ip ? `http://${manualForm.ip.trim()}:${manualForm.port}/onvif/device_service` : undefined,
-        onvif_username: manualForm.onvif_username,
-        onvif_password: manualForm.onvif_password,
-        manufacturer: 'Manual',
-        model: 'IP Camera',
-        status: 'online',
-        enabled: manualForm.enabled,
-        auto_adopted: false,
-        config: { record_substream: manualForm.record_substream, zones: manualForm.zones }
-      };
+      let body: any;
+      if (editingId) {
+        body = {
+          name: manualForm.name.trim(),
+          enabled: manualForm.enabled,
+          config: { record_substream: manualForm.record_substream, zones: manualForm.zones },
+        };
+        if (manualForm.onvif_username.trim()) body.onvif_username = manualForm.onvif_username.trim();
+        if (manualForm.onvif_password.trim()) body.onvif_password = manualForm.onvif_password.trim();
+        if (manualForm.ip.trim()) {
+          body.onvif_endpoint = `http://${manualForm.ip.trim()}:${manualForm.port || '80'}/onvif/device_service`;
+        }
+        if (manualForm.rtsp_url_main.trim() && !manualForm.rtsp_url_main.includes('***')) {
+          body.rtsp_url_main = manualForm.rtsp_url_main.trim();
+        }
+        if (manualForm.rtsp_url_sub.trim() && !manualForm.rtsp_url_sub.includes('***')) {
+          body.rtsp_url_sub = manualForm.rtsp_url_sub.trim();
+        }
+      } else {
+        body = {
+          name: manualForm.name.trim(),
+          rtsp_url_main: restoreMaskedRtspPassword(manualForm.rtsp_url_main.trim(), originalRtsp.main) || `rtsp://${manualForm.onvif_username}:${manualForm.onvif_password}@${manualForm.ip.trim()}:554/stream1`,
+          rtsp_url_sub: restoreMaskedRtspPassword(manualForm.rtsp_url_sub.trim(), originalRtsp.sub) || undefined,
+          onvif_endpoint: manualForm.ip ? `http://${manualForm.ip.trim()}:${manualForm.port}/onvif/device_service` : undefined,
+          onvif_username: manualForm.onvif_username,
+          onvif_password: manualForm.onvif_password,
+          manufacturer: 'Manual',
+          model: 'IP Camera',
+          status: 'online',
+          enabled: manualForm.enabled,
+          auto_adopted: false,
+          config: { record_substream: manualForm.record_substream, zones: manualForm.zones },
+        };
+      }
       
       const method = editingId ? 'PATCH' : 'POST';
       const url = editingId ? apiUrl(`/cameras/${editingId}`) : apiUrl('/cameras');
@@ -938,8 +983,13 @@ const Settings: React.FC = () => {
                 {showManualForm && (
                   <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'rgba(0,229,255,0.03)' }}>
                     <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--cyan)', marginBottom: 14 }}>
-                      {editingId ? 'Edit Camera' : '＋ New Camera'}
+                      {editingId ? `Edit Camera: ${manualForm.name || 'Selected'}` : '＋ New Camera'}
                     </div>
+                    {editingId && (
+                      <div style={{ background: 'rgba(0,210,255,0.06)', border: '1px solid rgba(0,210,255,0.22)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: '0.78rem', color: 'var(--t2)', lineHeight: 1.5 }}>
+                        <strong style={{ color: 'var(--cyan)' }}>✦ Camera Settings:</strong> To rename the camera, simply change the name below and click Save. Existing stream URLs and ONVIF discovery parameters remain preserved unless you explicitly enter new values.
+                      </div>
+                    )}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
                       <div className="form-group">
                         <label className="form-label">Camera Name *</label>
@@ -958,23 +1008,23 @@ const Settings: React.FC = () => {
                       </div>
                       <div className="form-group">
                         <label className="form-label">Username</label>
-                        <input className="form-input" placeholder="admin" value={manualForm.onvif_username}
+                        <input className="form-input" placeholder={editingId ? 'Leave blank to keep current' : 'admin'} value={manualForm.onvif_username}
                           onChange={e => setManualForm(f => ({ ...f, onvif_username: e.target.value }))} />
                       </div>
                       <div className="form-group">
                         <label className="form-label">Password</label>
-                        <input className="form-input" type="password" placeholder="••••••••" value={manualForm.onvif_password}
+                        <input className="form-input" type="password" placeholder={editingId ? 'Leave blank to keep current' : '••••••••'} value={manualForm.onvif_password}
                           onChange={e => setManualForm(f => ({ ...f, onvif_password: e.target.value }))} />
                       </div>
                       <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                        <label className="form-label">RTSP Main Stream URL (optional, auto-built from IP if empty)</label>
+                        <label className="form-label">RTSP Main Stream URL {editingId ? '(optional, keep unchanged or enter new URL)' : '(optional, auto-built from IP if empty)'}</label>
                         <input className="form-input" type="text" autoComplete="off" spellCheck={false}
                           placeholder="rtsp://username:password@camera-ip:554/stream1"
                           value={manualForm.rtsp_url_main}
                           onChange={e => setManualForm(f => ({ ...f, rtsp_url_main: e.target.value }))} />
                       </div>
                       <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                        <label className="form-label">RTSP Sub Stream URL (optional)</label>
+                        <label className="form-label">RTSP Sub Stream URL {editingId ? '(optional, keep unchanged or enter new URL)' : '(optional)'}</label>
                         <input className="form-input" type="text" autoComplete="off" spellCheck={false}
                           placeholder="rtsp://username:password@camera-ip:554/stream2"
                           value={manualForm.rtsp_url_sub}
@@ -1166,12 +1216,46 @@ const Settings: React.FC = () => {
                       }}>
                         <div className={`dot ${cam.status === 'offline' ? 'offline' : cam.status === 'recording' ? 'recording' : 'online'}`} style={{ flexShrink: 0 }} />
                         <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                          <div style={{ 
-                            fontWeight: 600, fontSize: '0.875rem', color: 'var(--t1)',
-                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-                          }} title={cam.name}>
-                            {cam.name}
-                          </div>
+                          {quickRenamingId === cam.id ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                              <input
+                                className="form-input"
+                                style={{ padding: '3px 8px', fontSize: '0.84rem', width: 220, height: 28 }}
+                                value={quickRenameValue}
+                                onChange={e => setQuickRenameValue(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') handleQuickRename(cam.id);
+                                  if (e.key === 'Escape') setQuickRenamingId(null);
+                                }}
+                                autoFocus
+                              />
+                              <button className="btn btn-primary" style={{ padding: '3px 8px', fontSize: '0.72rem', height: 28 }} onClick={() => handleQuickRename(cam.id)}>
+                                Save
+                              </button>
+                              <button className="btn btn-ghost" style={{ padding: '3px 8px', fontSize: '0.72rem', height: 28 }} onClick={() => setQuickRenamingId(null)}>
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ 
+                                fontWeight: 600, fontSize: '0.875rem', color: 'var(--t1)',
+                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                              }} title={cam.name}>
+                                {cam.name}
+                              </span>
+                              <button
+                                title="Quick rename"
+                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 4px', color: 'var(--t3)', display: 'inline-flex', alignItems: 'center' }}
+                                onClick={() => {
+                                  setQuickRenamingId(cam.id);
+                                  setQuickRenameValue(cam.name);
+                                }}
+                              >
+                                <Edit2 size={12} />
+                              </button>
+                            </div>
+                          )}
                           <div style={{ 
                             fontSize: '0.72rem', color: 'var(--t3)', marginTop: 2,
                             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
