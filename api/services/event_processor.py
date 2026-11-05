@@ -253,6 +253,7 @@ async def _persist_detection(data: dict) -> None:
             logger.error("VLM snapshot analysis failed: %s", err)
 
     saved_count = 0
+    batch_seen_keys: set[tuple[str, str, str]] = set()
     async with async_session_maker() as session:
         for obj in objects:
             zone = _matching_zone(obj, zones, frame)
@@ -271,8 +272,10 @@ async def _persist_detection(data: dict) -> None:
             cooldown = float(zone.get("cooldown_seconds") or 60.0)
             cooldown_key = (str(camera_id), zone_id, str(obj.get("class") or "object"))
             event_time = event_timestamp.timestamp()
-            if event_time - _LAST_ZONE_EVENTS.get(cooldown_key, 0) < cooldown:
+            last_event_time = _LAST_ZONE_EVENTS.get(cooldown_key, 0)
+            if cooldown_key not in batch_seen_keys and (event_time - last_event_time < cooldown):
                 continue
+            batch_seen_keys.add(cooldown_key)
             _LAST_ZONE_EVENTS[cooldown_key] = event_time
             if len(_LAST_ZONE_EVENTS) > 1000:
                 cutoff = event_time - 3600.0

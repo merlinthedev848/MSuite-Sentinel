@@ -62,14 +62,19 @@ def safe_camera_id(camera_id: str | None) -> str | None:
 
 
 def webhook_target_allowed(url: str | None) -> bool:
-    """Allow public http(s) webhook targets and refuse local or metadata addresses."""
+    """Validate webhook target addresses.
+    
+    Permits public targets and private LAN destinations (e.g. Home Assistant,
+    local MQTT/Node-RED bridges) while strictly forbidding loopback, link-local
+    cloud metadata endpoints, multicast, and reserved addresses.
+    """
     if not url:
         return False
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return False
     host = parsed.hostname.strip().lower()
-    if host in {"localhost", "metadata.google.internal"} or host.endswith(".local"):
+    if host in {"localhost", "metadata.google.internal", "127.0.0.1", "0.0.0.0", "::1"}:
         return False
     try:
         addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or 80)}
@@ -83,8 +88,7 @@ def webhook_target_allowed(url: str | None) -> bool:
         except ValueError:
             return False
         if (
-            ip.is_private
-            or ip.is_loopback
+            ip.is_loopback
             or ip.is_link_local
             or ip.is_multicast
             or ip.is_reserved

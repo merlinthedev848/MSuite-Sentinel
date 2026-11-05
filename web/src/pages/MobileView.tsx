@@ -107,14 +107,20 @@ export const MobileView: React.FC<MobileViewProps> = ({ onLogout }) => {
     setChatLoading(true);
 
     try {
-      const res = await fetch(apiUrl('/operator/chat'), {
+      const res = await fetch(apiUrl('/agent/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg })
+        body: JSON.stringify({
+          message: msg,
+          history: chatMessages.map(m => ({
+            role: m.role === 'user' ? 'user' : 'model',
+            content: m.text
+          }))
+        })
       });
       if (res.ok) {
         const data = await res.json();
-        setChatMessages(prev => [...prev, { role: 'assistant', text: data.reply || data.message || 'Understood.' }]);
+        setChatMessages(prev => [...prev, { role: 'assistant', text: data.response || data.reply || data.message || 'Action executed.' }]);
       } else {
         setChatMessages(prev => [...prev, { role: 'assistant', text: 'Unable to reach Sentinel Operator service.' }]);
       }
