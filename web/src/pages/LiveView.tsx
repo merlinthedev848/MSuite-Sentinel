@@ -13,6 +13,8 @@ import {
   Crosshair,
   ChevronLeft,
   ChevronRight,
+  Play,
+  Pause,
 } from 'lucide-react';
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiUrl } from '../lib/endpoints';
@@ -372,7 +374,7 @@ const LiveView: React.FC = () => {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [events, setEvents] = useState<CameraEvent[]>([]);
   const [recordings, setRecordings] = useState<Record<string, RecordingFile[]>>({});
-  const [layout, setLayout] = useState<1 | 4 | 9 | 16>(4);
+  const [layout, setLayout] = useState<1 | 2 | 4 | 9 | 16>(4);
   const [maximizedId, setMaximizedId] = useState<string | null>(null);
   const [patrolMode, setPatrolMode] = useState(false);
   const [patrolOffset, setPatrolOffset] = useState<number>(0);
@@ -461,6 +463,9 @@ const LiveView: React.FC = () => {
       } else if (e.key === '1') {
         setMaximizedId(null);
         setLayout(1);
+      } else if (e.key === '2') {
+        setMaximizedId(null);
+        setLayout(2);
       } else if (e.key === '4') {
         setMaximizedId(null);
         setLayout(4);
@@ -472,6 +477,9 @@ const LiveView: React.FC = () => {
         setLayout(16);
       } else if (e.key.toLowerCase() === 'p') {
         setPatrolMode(prev => !prev);
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        setLivePaused(p => !p);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -479,7 +487,27 @@ const LiveView: React.FC = () => {
   }, [maximizedId, cameras.length]);
 
   const onlineCams = cameras.filter(c => c.status !== 'offline').length;
-  const gridClass = maximizedId || layout === 1 ? 'g1' : layout === 4 ? 'g4' : layout === 9 ? 'g9' : 'g16';
+  const gridClass = useMemo(() => {
+    if (maximizedId || layout === 1) return 'g1';
+    if (layout === 2) return 'g2';
+    if (layout === 4) {
+      return visibleCameras.length <= 2 ? 'g2' : 'g4';
+    }
+    if (layout === 9) {
+      if (visibleCameras.length <= 2) return 'g2';
+      if (visibleCameras.length <= 4) return 'g4';
+      if (visibleCameras.length <= 6) return 'g6';
+      return 'g9';
+    }
+    if (layout === 16) {
+      if (visibleCameras.length <= 2) return 'g2';
+      if (visibleCameras.length <= 4) return 'g4';
+      if (visibleCameras.length <= 6) return 'g6';
+      if (visibleCameras.length <= 9) return 'g9';
+      return 'g16';
+    }
+    return 'g4';
+  }, [maximizedId, layout, visibleCameras.length]);
   const syncSpan = 6 * 3600 * 1000;
 
   const chartData = useMemo(() => {
@@ -527,6 +555,12 @@ const LiveView: React.FC = () => {
   const GridIcon = ({ n }: { n: number }) => (
     <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor">
       {n === 1 && <rect x="0.5" y="0.5" width="12" height="12" rx="1.5" />}
+      {n === 2 && (
+        <>
+          <rect x="0.5" y="0.5" width="5.5" height="12" rx="1" />
+          <rect x="7" y="0.5" width="5.5" height="12" rx="1" />
+        </>
+      )}
       {n === 4 && (<><rect x="0.5" y="0.5" width="5.5" height="5.5" rx="1"/><rect x="7" y="0.5" width="5.5" height="5.5" rx="1"/><rect x="0.5" y="7" width="5.5" height="5.5" rx="1"/><rect x="7" y="7" width="5.5" height="5.5" rx="1"/></>)}
       {n === 9 && (<><rect x="0.5" y="0.5" width="3.3" height="3.3" rx="0.5"/><rect x="4.85" y="0.5" width="3.3" height="3.3" rx="0.5"/><rect x="9.2" y="0.5" width="3.3" height="3.3" rx="0.5"/><rect x="0.5" y="4.85" width="3.3" height="3.3" rx="0.5"/><rect x="4.85" y="4.85" width="3.3" height="3.3" rx="0.5"/><rect x="9.2" y="4.85" width="3.3" height="3.3" rx="0.5"/><rect x="0.5" y="9.2" width="3.3" height="3.3" rx="0.5"/><rect x="4.85" y="9.2" width="3.3" height="3.3" rx="0.5"/><rect x="9.2" y="9.2" width="3.3" height="3.3" rx="0.5"/></>)}
       {n === 16 && (
@@ -571,30 +605,53 @@ const LiveView: React.FC = () => {
           <div className="topbar-stat"><span className="topbar-stat-label">Cameras</span><span className="topbar-stat-value cyan">{onlineCams} / {cameras.length} Online</span></div>
           <div className="topbar-stat"><span className="topbar-stat-label">AI Status</span><span className="topbar-stat-value" style={{ color: 'var(--pink)' }}>Active</span></div>
           <button
-            className={`layout-btn${livePaused ? ' active' : ''}`}
-            title={livePaused ? 'Resume Live Feeds' : 'Pause Live Feeds'}
+            className="btn btn-ghost"
+            title={livePaused ? 'Resume Live Feeds (Space)' : 'Pause Live Feeds (Space)'}
             onClick={() => setLivePaused(p => !p)}
-            style={{ fontSize: '0.7rem', padding: '0 8px' }}
+            style={{ height: 28, fontSize: '0.72rem', padding: '0 8px', display: 'flex', gap: 5, alignItems: 'center' }}
           >
-            {livePaused ? 'Resume' : 'Pause'}
+            {livePaused ? <Play size={12} /> : <Pause size={12} />}
+            <span>{livePaused ? 'Resume' : 'Pause'}</span>
           </button>
-          <button className="layout-btn" title="Wallboard Popout" onClick={() => window.open('/wallboard', '_blank')}>
-            <ExternalLink size={14} />
+          <button
+            className={`btn btn-ghost${patrolMode ? ' active' : ''}`}
+            title="Automated Patrol Mode (Rotate Feeds - Press P)"
+            onClick={() => setPatrolMode(p => !p)}
+            style={{
+              height: 28,
+              color: patrolMode ? 'var(--cyan)' : 'inherit',
+              fontSize: '0.72rem',
+              display: 'flex',
+              gap: 5,
+              alignItems: 'center',
+              padding: '0 8px',
+              border: patrolMode ? '1px solid var(--cyan-border)' : '1px solid transparent',
+              background: patrolMode ? 'rgba(0, 210, 255, 0.08)' : 'transparent',
+            }}
+          >
+            <Activity size={12} />
+            <span>Patrol</span>
           </button>
-          <div className="layout-toggle">
-            <button 
-              className={`layout-btn${patrolMode ? ' active' : ''}`} 
-              title="Automated Patrol Mode (Rotate Feeds)"
-              onClick={() => setPatrolMode(p => !p)}
-              style={{ color: patrolMode ? 'var(--cyan)' : 'inherit', fontSize: '0.7rem', display: 'flex', gap: 4, alignItems: 'center', padding: '0 8px' }}
-            >
-              <Activity size={12} /> Patrol
-            </button>
-            {([1, 4, 9, 16] as const).map(n => (
-              <button key={n} className={`layout-btn${layout === n && !maximizedId ? ' active' : ''}`} onClick={() => { setMaximizedId(null); setLayout(n); }}>
+          <button
+            className="layout-btn"
+            title="Open Wallboard NOC in new tab"
+            onClick={() => window.open('/wallboard', '_blank')}
+            style={{ width: 28, height: 28 }}
+          >
+            <ExternalLink size={13} />
+          </button>
+          <div className="layout-toggle" style={{ height: 28, padding: '2px 4px' }}>
+            {([1, 2, 4, 9, 16] as const).map(n => (
+              <button
+                key={n}
+                className={`layout-btn${layout === n && !maximizedId ? ' active' : ''}`}
+                title={`${n}-Camera Layout`}
+                onClick={() => { setMaximizedId(null); setLayout(n); }}
+              >
                 <GridIcon n={n} />
               </button>
             ))}
+            <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 3px' }} />
             <button
               className="layout-btn"
               title="Fullscreen Monitor Grid"
@@ -602,9 +659,8 @@ const LiveView: React.FC = () => {
                 const el = document.querySelector('.cam-grid') as HTMLElement;
                 if (el) requestNativeFullscreen(el);
               }}
-              style={{ fontSize: '0.7rem', display: 'flex', gap: 4, alignItems: 'center', padding: '0 8px' }}
             >
-              <Maximize2 size={12} /> Fullscreen
+              <Maximize2 size={13} />
             </button>
           </div>
         </div>
