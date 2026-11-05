@@ -456,8 +456,10 @@ async def vacuum_database(db: AsyncSession = Depends(get_db)):
             message = "PostgreSQL statistics were refreshed with ANALYZE."
         else:
             await db.commit()
-            await db.execute(text("VACUUM;"))
-            message = "SQLite VACUUM completed."
+            async with _engine.connect() as conn:
+                await conn.execution_options(isolation_level="AUTOCOMMIT")
+                await conn.execute(text("VACUUM;"))
+            message = "SQLite database compacted and optimized."
         return {"status": "success", "message": message}
     except Exception as e:
         return {"status": "error", "message": str(e)}

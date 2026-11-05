@@ -102,13 +102,19 @@ export default function App() {
 
   useEffect(() => {
     if (!isConnected || !baseUrl) return;
+    let failedAttempts = 0;
     const timer = setInterval(async () => {
       try {
-        setHealth(await fetchHealth(baseUrl));
+        const nextHealth = await fetchHealth(baseUrl);
+        setHealth(nextHealth);
         await fetchDashboardData(baseUrl, authToken);
+        failedAttempts = 0;
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Lost connection to Sentinel server');
-        setIsConnected(false);
+        failedAttempts += 1;
+        if (failedAttempts >= 3) {
+          setError(e instanceof Error ? e.message : 'Lost connection to Sentinel server after multiple retries');
+          setIsConnected(false);
+        }
       }
     }, 10000);
     return () => clearInterval(timer);

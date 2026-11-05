@@ -677,6 +677,14 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
     fp = await asyncio.to_thread(ensure_faststart, fp)
     file_size = fp.stat().st_size
 
+    is_download = (
+        "/export/" in request.url.path or 
+        request.query_params.get("download") in ("1", "true", "yes")
+    )
+    resp_headers = {"Accept-Ranges": "bytes"}
+    if is_download:
+        resp_headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+
     range_header = request.headers.get("range")
     if range_header:
         start = 0
@@ -704,18 +712,26 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
                     remaining -= len(chunk)
                     yield chunk
 
+        stream_headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(end - start + 1),
+        }
+        if is_download:
+            stream_headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+
         return StreamingResponse(
             async_iter_file(),
             status_code=206,
             media_type="video/mp4",
-            headers={
-                "Accept-Ranges": "bytes",
-                "Content-Range": f"bytes {start}-{end}/{file_size}",
-                "Content-Length": str(end - start + 1),
-            },
+            headers=stream_headers,
         )
-    return FileResponse(str(fp), media_type="video/mp4",
-                        headers={"Accept-Ranges": "bytes"})
+    return FileResponse(
+        str(fp),
+        media_type="video/mp4",
+        filename=filename if is_download else None,
+        headers=resp_headers,
+    )
 
 
 # ── Frontend SPA — ALWAYS registered, handles missing build gracefully ──

@@ -47,7 +47,8 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data.download_url) {
-          const fullUrl = apiUrl(data.download_url);
+          const downloadParam = data.download_url.includes('?') ? `${data.download_url}&download=1` : `${data.download_url}?download=1`;
+          const fullUrl = apiUrl(downloadParam);
           const link = document.createElement('a');
           link.href = fullUrl;
           link.download = data.filename || `event_${ev.id}.mp4`;
@@ -254,7 +255,7 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
                 {/* Event Description */}
                 <div className="mobile-event-info" style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                    <span className={badgeClass}>{ev.object_class || 'Motion'}</span>
+                    <span className={badgeClass}>{ev.object_class?.split(/[:@]/)[0]?.trim() || 'Motion'}</span>
                     <span style={{
                       fontSize: '0.75rem',
                       fontWeight: 600,
@@ -266,6 +267,11 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
                       {camName}
                     </span>
                   </div>
+                  {ev.object_class?.includes(':') && (
+                    <div style={{ fontSize: '0.68rem', color: 'var(--mobile-text-muted)', marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {ev.object_class.split(':').slice(1).join(':').trim()}
+                    </div>
+                  )}
                   <span className="mobile-event-time">
                     {formatEventTime(ev.timestamp)}
                   </span>

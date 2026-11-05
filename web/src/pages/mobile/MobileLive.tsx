@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Camera, Volume2, VolumeX, PlaySquare, RefreshCw } from 'lucide-react';
+import { Camera, Volume2, VolumeX, PlaySquare, RefreshCw, Download, Search } from 'lucide-react';
 import LivePlayer from '../../components/LivePlayer';
+import { apiUrl } from '../../lib/endpoints';
 
 interface CameraItem {
   id: string;
@@ -26,6 +27,8 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
   const [mutedStates, setMutedStates] = useState<Record<string, boolean>>({});
   const [qualities, setQualities] = useState<Record<string, 'auto' | 'main' | 'sub'>>({});
   const [refreshing, setRefreshing] = useState(false);
+  const [capturingCamId, setCapturingCamId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const toggleMute = (camId: string) => {
     setMutedStates(prev => ({ ...prev, [camId]: !(prev[camId] ?? true) }));
@@ -40,6 +43,31 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
     await onRefresh();
     setTimeout(() => setRefreshing(false), 500);
   };
+
+  const handleCaptureSnapshot = async (camId: string, camName: string) => {
+    setCapturingCamId(camId);
+    try {
+      const res = await fetch(apiUrl(`/cameras/${camId}/snapshot`));
+      if (!res.ok) throw new Error('Snapshot failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `snapshot_${camName.replace(/\s+/g, '_')}_${Date.now()}.jpg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('Snapshot could not be captured. Camera stream may be offline or initializing.');
+    } finally {
+      setCapturingCamId(null);
+    }
+  };
+
+  const filteredCameras = cameras.filter(c =>
+    c.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   if (cameras.length === 0) {
     return (
@@ -60,9 +88,9 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontSize: '0.8rem', color: 'var(--mobile-text-muted)', fontWeight: 600 }}>
-          {cameras.length} {cameras.length === 1 ? 'Camera' : 'Cameras'} Streaming
+          {filteredCameras.length} {filteredCameras.length === 1 ? 'Camera' : 'Cameras'} Streaming
         </span>
         <button
           onClick={handleRefresh}
@@ -81,10 +109,33 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
         </button>
       </div>
 
-      {cameras.map(cam => {
+      {cameras.length > 2 && (
+        <div style={{ position: 'relative', marginBottom: 12 }}>
+          <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--mobile-text-muted)' }} />
+          <input
+            type="text"
+            placeholder="Search cameras..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              width: '100%',
+              background: 'var(--mobile-surface)',
+              border: '1px solid var(--mobile-border)',
+              borderRadius: 8,
+              padding: '7px 10px 7px 30px',
+              fontSize: '0.8rem',
+              color: 'var(--mobile-text)',
+              outline: 'none',
+            }}
+          />
+        </div>
+      )}
+
+      {filteredCameras.map(cam => {
         const isMuted = mutedStates[cam.id] ?? true;
         const quality = qualities[cam.id] ?? 'auto';
         const isOnline = cam.status !== 'offline';
+        const isCapturing = capturingCamId === cam.id;
 
         return (
           <div key={cam.id} className="mobile-live-card">
@@ -138,6 +189,14 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
                   title={isMuted ? 'Unmute' : 'Mute'}
                 >
                   {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} color="var(--mobile-accent)" />}
+                </button>
+                <button
+                  className="mobile-ctrl-btn"
+                  onClick={() => handleCaptureSnapshot(cam.id, cam.name)}
+                  disabled={isCapturing}
+                  title="Capture still JPEG"
+                >
+                  {isCapturing ? <div className="spinner" style={{ width: 12, height: 12 }} /> : <Download size={14} />} Still
                 </button>
               </div>
 

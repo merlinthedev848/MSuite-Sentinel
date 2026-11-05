@@ -71,8 +71,55 @@ export const MobileView: React.FC<MobileViewProps> = ({ onLogout }) => {
 
   useEffect(() => {
     loadCameras();
-    const interval = setInterval(loadCameras, 15000);
-    return () => clearInterval(interval);
+
+    let eventsSource: EventSource | null = null;
+    let reconnectTimeout: number | undefined;
+    let sseActive = true;
+
+    const connectSSE = () => {
+      if (!sseActive) return;
+      try {
+        eventsSource = new EventSource(apiUrl('/system/live'));
+        eventsSource.onmessage = (msg) => {
+          try {
+            const ev = JSON.parse(msg.data);
+            if (ev.type === 'snapshot' && ev.data?.cameras) {
+              setCameras(Array.isArray(ev.data.cameras) ? ev.data.cameras : []);
+            } else if (ev.type === 'ai_event') {
+              if (audioAlerts.isEnabled()) {
+                audioAlerts.playChime(ev.data?.threat_level === 'HIGH' ? 'threat' : 'info');
+              }
+              loadCameras();
+            } else if (ev.type === 'camera_status') {
+              loadCameras();
+            }
+          } catch {}
+        };
+        eventsSource.onerror = () => {
+          if (eventsSource) {
+            eventsSource.close();
+            eventsSource = null;
+          }
+          if (sseActive) {
+            reconnectTimeout = window.setTimeout(connectSSE, 5000);
+          }
+        };
+      } catch {
+        if (sseActive) {
+          reconnectTimeout = window.setTimeout(connectSSE, 5000);
+        }
+      }
+    };
+
+    connectSSE();
+    const fallbackPoll = setInterval(loadCameras, 15000);
+
+    return () => {
+      sseActive = false;
+      if (eventsSource) eventsSource.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      clearInterval(fallbackPoll);
+    };
   }, []);
 
   const handleSelectCameraForPlayback = (cameraId: string) => {

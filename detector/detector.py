@@ -212,6 +212,7 @@ class DetectorNode:
             decoded = 0
             frames_per_camera = max(1, int(os.getenv("FRAMES_PER_CAMERA", "48")))
             last_heartbeat = 0.0
+            clean_rotation = False
             while cap.isOpened():
                 frame_count += 1
                 now = time.time()
@@ -229,7 +230,8 @@ class DetectorNode:
                     break
                 decoded += 1
                 if decoded >= frames_per_camera:
-                    logger.info("Finished %s frames on %s; moving to the next camera", decoded, target_camera_id)
+                    logger.info("Finished %s frames on %s; rotating to next camera", decoded, target_camera_id)
+                    clean_rotation = True
                     break
 
                 # Motion gating pre-filter to skip idle frames without running heavy neural networks
@@ -297,8 +299,9 @@ class DetectorNode:
                 except Exception:
                     pass
 
-        logger.info("Stream connection lost or ended. Reconnecting in 5s...")
-        time.sleep(5)
+        if not clean_rotation:
+            logger.info("Stream connection ended or camera offline. Retrying in 5s...")
+            time.sleep(5)
 
     def publish_heartbeat(self, camera_id: str):
         self._ensure_mqtt()

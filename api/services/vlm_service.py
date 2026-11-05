@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import os
 from typing import Optional
 import httpx
 from api.config import settings
@@ -43,11 +44,55 @@ class VLMService:
             return await self._analyze_gemini(image_bytes, classes_str)
         elif provider == "openai" and settings.openai_api_key:
             return await self._analyze_openai(image_bytes, classes_str)
+        elif provider == "ollama":
+            return await self._analyze_ollama(image_bytes, classes_str)
         
-        # No cloud model is configured. The local path is a keyword table, not a vision model.
+        # Local rule-based analyzer when no cloud or local VLM is selected
         result = self._local_fallback(detected_classes)
-        result["engine"] = "keyword-rules"
         return result
+
+    async def _analyze_ollama(self, image_bytes: bytes, classes_str: str) -> dict:
+        """Query local Ollama instance (e.g. llama3.2-vision, moondream, or llava)."""
+        ollama_url = getattr(settings, "ollama_url", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
+        model = getattr(settings, "ollama_model", os.getenv("OLLAMA_MODEL", "llama3.2-vision"))
+        b64_data = base64.b64encode(image_bytes).decode("utf-8")
+        
+        prompt = (
+            f"Analyze this security camera frame. YOLO detected: {classes_str}. "
+            "Describe the scene and any activity in a single short sentence (max 15 words). "
+            "Assess the threat level as LOW, MEDIUM, or HIGH. "
+            'Return JSON: {"description": "...", "threat_level": "LOW|MEDIUM|HIGH"}'
+        )
+
+        try:
+            client = await self._get_client()
+            resp = await client.post(
+                f"{ollama_url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt,
+                            "images": [b64_data],
+                        }
+                    ],
+                    "format": "json",
+                    "stream": False,
+                },
+                timeout=12.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data.get("message", {}).get("content", "")
+                parsed = json.loads(self._clean_json_text(content))
+                if isinstance(parsed, dict) and "description" in parsed:
+                    parsed["engine"] = f"ollama-{model}"
+                    return parsed
+        except Exception as e:
+            logger.debug(f"Ollama local vision inference skipped or timed out: {e}")
+
+        return self._local_fallback(classes_str.split(", "))
 
     async def _analyze_gemini(self, image_bytes: bytes, classes_str: str) -> dict:
         b64_data = base64.b64encode(image_bytes).decode("utf-8")
@@ -155,25 +200,43 @@ class VLMService:
         return self._local_fallback(classes_str.split(", "))
 
     def _local_fallback(self, classes: list[str]) -> dict:
-        """Lightweight rules-based security context analyzer."""
-        if not classes or classes == [""]:
+        """Lightweight rules-based security context analyzer producing clear incident summaries."""
+        clean_classes = [c.strip().lower() for c in classes if c and c.strip()]
+        if not clean_classes or clean_classes == [""]:
             return {
-                "description": "Motion detected, no recognized objects in view.",
-                "threat_level": "LOW"
+                "description": "Motion activity observed in camera field of view.",
+                "threat_level": "LOW",
+                "engine": "local-rule-engine",
             }
-        
-        objects_desc = ", ".join(classes)
-        threat = "LOW"
-        
-        # Simple security rules
-        suspicious_classes = {"person", "backpack", "suitcase", "knife", "scissors"}
-        if any(c in suspicious_classes for c in classes):
+
+        suspicious_high = {"knife", "gun", "weapon", "fire", "smoke", "crowbar"}
+        suspicious_medium = {"person", "backpack", "suitcase", "scissors"}
+
+        if any(c in suspicious_high for c in clean_classes):
+            threat = "HIGH"
+        elif any(c in suspicious_medium for c in clean_classes):
             threat = "MEDIUM"
-        
+        else:
+            threat = "LOW"
+
+        vehicles = [c for c in clean_classes if c in ("car", "truck", "motorcycle", "bus", "bicycle")]
+        animals = [c for c in clean_classes if c in ("dog", "cat", "bird", "bear", "horse", "animal")]
+
+        if "person" in clean_classes and vehicles:
+            desc = f"Person and {vehicles[0]} movement detected in zone"
+        elif "person" in clean_classes:
+            desc = "Person activity detected in monitored zone"
+        elif vehicles:
+            desc = f"Vehicle activity ({', '.join(vehicles)}) observed"
+        elif animals:
+            desc = f"Animal movement ({', '.join(animals)}) detected"
+        else:
+            desc = f"{', '.join(clean_classes).capitalize()} detected in camera view"
+
         return {
-            "description": f"Keyword rule matched {objects_desc}. This is not a vision-language description.",
+            "description": desc,
             "threat_level": threat,
-            "engine": "keyword-rules",
+            "engine": "local-rule-engine",
         }
 
     async def close(self):

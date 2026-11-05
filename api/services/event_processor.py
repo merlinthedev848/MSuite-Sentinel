@@ -378,6 +378,13 @@ async def signal_watchdog():
                     for rule in rules
                     if (rule.config or {}).get("trigger_event") == "signal_loss"
                 ]
+            active_ids = {cid for cid, _ in watched}
+            for stale_id in list(_LAST_SEEN.keys()):
+                if stale_id not in active_ids:
+                    _LAST_SEEN.pop(stale_id, None)
+                    _SIGNAL_ALERTED.pop(stale_id, None)
+                    _LAST_VLM_ANALYSIS.pop(stale_id, None)
+
             for camera_id, _name in watched:
                 last = _LAST_SEEN.get(camera_id)
                 if last is None:

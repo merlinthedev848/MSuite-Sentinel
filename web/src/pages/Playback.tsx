@@ -133,6 +133,11 @@ const Playback: React.FC = () => {
   });
 
   const [isDragging, setIsDragging] = useState(false);
+  const [toast, setToast] = useState('');
+  const showToast = (msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(''), 4500);
+  };
   const dragStartRef = useRef<{ x: number; start: number; end: number } | null>(null);
   const hasDraggedRef = useRef(false);
 
@@ -935,22 +940,23 @@ const Playback: React.FC = () => {
                         });
                         if (!res.ok) {
                           const err = await res.json().catch(() => ({}));
-                          alert(`Export Failed: ${err.detail || 'Unable to generate incident package'}`);
+                          showToast(`Export Failed: ${err.detail || 'Unable to generate incident package'}`);
                           return;
                         }
                         const data = await res.json();
                         
                         // Automatically trigger browser file download
                         const downloadLink = document.createElement('a');
-                        downloadLink.href = recordingSrc(data.download_url);
+                        const dlUrl = data.download_url.includes('?') ? `${data.download_url}&download=1` : `${data.download_url}?download=1`;
+                        downloadLink.href = recordingSrc(dlUrl);
                         downloadLink.download = data.filename;
                         document.body.appendChild(downloadLink);
                         downloadLink.click();
                         document.body.removeChild(downloadLink);
 
-                        alert(`Incident Evidence Package Ready!\n\nPackage ID: ${data.export_id}\nSHA-256 Verification: ${data.sha256_hash}\nFile: ${data.filename}`);
+                        showToast(`Evidence Package Ready! Verified SHA-256: ${data.sha256_hash.slice(0, 16)}...`);
                       } catch (error) {
-                        alert(`Export Network Error: ${error instanceof Error ? error.message : 'Request failed'}`);
+                        showToast(`Export Network Error: ${error instanceof Error ? error.message : 'Request failed'}`);
                       }
                     }}
                   >
@@ -1082,7 +1088,7 @@ const Playback: React.FC = () => {
                 >
                   {/* Small tag indicator inside viewport on hover */}
                   <div className="timeline-event-tag">
-                    {ev.object_class} ({formatTimeHMS(ev.timestampMs)})
+                    {ev.object_class?.split(/[:@]/)[0]?.trim() || 'Event'} ({formatTimeHMS(ev.timestampMs)})
                   </div>
                 </div>
               );
@@ -1196,6 +1202,7 @@ const Playback: React.FC = () => {
           </div>
         </div>
       </div>
+      {toast && <div className="toast">{toast}</div>}
     </div>
   );
 };

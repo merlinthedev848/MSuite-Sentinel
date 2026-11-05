@@ -433,7 +433,9 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
   const currentOffset = videoRef.current?.currentTime || 0;
 
   const handleDownloadDirect = (url: string, filename?: string) => {
-    const fullUrl = apiUrl(url);
+    const hasQuery = url.includes('?');
+    const downloadParam = hasQuery ? `${url}&download=1` : `${url}?download=1`;
+    const fullUrl = apiUrl(downloadParam);
     const link = document.createElement('a');
     link.href = fullUrl;
     link.download = filename || 'recording.mp4';
