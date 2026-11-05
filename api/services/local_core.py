@@ -14,6 +14,7 @@ import logging
 import shutil
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import psutil
@@ -42,7 +43,7 @@ def _safe_disk_usage(path_str: str) -> tuple[int, int, int]:
             p = p.parent
     except Exception:
         pass
-    for fallback in [Path.cwd(), Path.home(), "."]:
+    for fallback in [Path.cwd(), Path.home(), Path(".")]:
         try:
             return shutil.disk_usage(str(fallback))
         except Exception:
@@ -119,66 +120,112 @@ class LocalCore:
     async def refresh_snapshot(self, *, include_storage: bool = False) -> dict[str, Any]:
         from api.services.recorder import recorder_manager, storage_report
 
-        async with async_session_maker() as db:
-            cameras_result = await db.execute(select(Camera))
-            cameras = [_camera_payload(camera) for camera in cameras_result.scalars().all()]
+        cameras: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        try:
+            async with async_session_maker() as db:
+                cameras_result = await db.execute(select(Camera))
+                cameras = [_camera_payload(camera) for camera in cameras_result.scalars().all()]
 
-            events_result = await db.execute(
-                select(SemanticEvent).order_by(desc(SemanticEvent.timestamp)).limit(20)
-            )
-            events = [_event_payload(event) for event in events_result.scalars().all()]
+                events_result = await db.execute(
+                    select(SemanticEvent).order_by(desc(SemanticEvent.timestamp)).limit(20)
+                )
+                events = [_event_payload(event) for event in events_result.scalars().all()]
+        except Exception as db_err:
+            logger.warning("Snapshot DB refresh error: %s", db_err)
 
-        health = await asyncio.to_thread(self._health_payload)
+        health: dict[str, Any] = {}
+        try:
+            health = await asyncio.to_thread(self._health_payload)
+        except Exception as exc:
+            logger.warning("Snapshot health generation error: %s", exc)
+            health = {"status": "degraded"}
+
         try:
             from api.services.probes import dependency_status
-            health.update(await dependency_status())
+            dep = await dependency_status()
+            health.update(dep)
             health.setdefault("network", {})
-            health["network"]["ok"] = health.get("status") == "online"
+            health["network"]["ok"] = dep.get("status") == "online"
         except Exception as exc:
             logger.warning("Dependency probe failed: %s", exc)
             health["status"] = "degraded"
+
         recording_storage = None
         now = time.monotonic()
         if include_storage or now - self._last_storage_refresh > 60:
-            recording_storage = await asyncio.to_thread(storage_report)
-            self._last_storage_refresh = now
+            try:
+                recording_storage = await asyncio.to_thread(storage_report)
+                self._last_storage_refresh = now
+            except Exception as stor_err:
+                logger.warning("Storage report error: %s", stor_err)
         else:
             recording_storage = (await self.get_snapshot()).get("recording_storage")
+
+        rec_status = {}
+        rec_diags = {}
+        try:
+            rec_status = recorder_manager.status()
+            rec_diags = recorder_manager.diagnostics()
+        except Exception:
+            pass
 
         return await self.update_snapshot(
             cameras=cameras,
             events=events,
             health=health,
-            recording=recorder_manager.status(),
-            stream_diagnostics=recorder_manager.diagnostics(),
+            recording=rec_status,
+            stream_diagnostics=rec_diags,
             recording_storage=recording_storage,
         )
 
     def _health_payload(self) -> dict[str, Any]:
         started = time.monotonic()
-        cpu_percent = psutil.cpu_percent(interval=None)
-        memory = psutil.virtual_memory()
-        net = psutil.net_io_counters()
-        storage_path = settings.storage_path
+        cpu_percent = 0.0
+        try:
+            cpu_percent = psutil.cpu_percent(interval=None)
+        except Exception:
+            pass
+
+        mem_percent = 0.0
+        mem_total_gb = 0.0
+        try:
+            memory = psutil.virtual_memory()
+            mem_percent = memory.percent
+            mem_total_gb = round(memory.total / (1024**3), 2)
+        except Exception:
+            pass
+
+        bytes_sent = 0
+        bytes_recv = 0
+        try:
+            net = psutil.net_io_counters()
+            if net is not None:
+                bytes_sent = getattr(net, "bytes_sent", 0) or 0
+                bytes_recv = getattr(net, "bytes_recv", 0) or 0
+        except Exception:
+            pass
+
+        storage_path = getattr(settings, "storage_path", "/recordings")
         total, used, free = _safe_disk_usage(storage_path)
 
         now = time.monotonic()
         up_mbps = 0.0
         down_mbps = 0.0
-        if self._last_network:
-            elapsed = max(now - self._last_network["timestamp"], 1)
-            up_mbps = max(0, ((net.bytes_sent - self._last_network["sent"]) * 8) / elapsed / 1_000_000)
-            down_mbps = max(0, ((net.bytes_recv - self._last_network["recv"]) * 8) / elapsed / 1_000_000)
-        self._last_network = {"sent": net.bytes_sent, "recv": net.bytes_recv, "timestamp": now}
+        if self._last_network and (bytes_sent or bytes_recv):
+            elapsed = max(now - self._last_network.get("timestamp", now), 1)
+            up_mbps = max(0, ((bytes_sent - self._last_network.get("sent", 0)) * 8) / elapsed / 1_000_000)
+            down_mbps = max(0, ((bytes_recv - self._last_network.get("recv", 0)) * 8) / elapsed / 1_000_000)
+        self._last_network = {"sent": bytes_sent, "recv": bytes_recv, "timestamp": now}
 
         return {
             "status": "online",
             "cpu_usage_percent": cpu_percent,
-            "memory_usage_percent": memory.percent,
-            "memory_total_gb": round(memory.total / (1024**3), 2),
+            "memory_usage_percent": mem_percent,
+            "memory_total_gb": mem_total_gb,
             "network": {
-                "bytes_sent": net.bytes_sent,
-                "bytes_recv": net.bytes_recv,
+                "bytes_sent": bytes_sent,
+                "bytes_recv": bytes_recv,
                 "up_mbps": round(up_mbps, 2),
                 "down_mbps": round(down_mbps, 2),
             },
@@ -189,14 +236,18 @@ class LocalCore:
                 "free_gb": round(free / (1024**3), 2),
                 "usage_percent": round((used / total) * 100, 2) if total > 0 else 0,
             },
-            "record_codec": getattr(settings, "record_codec", "copy"),
+            "record_codec": getattr(settings, "record_video_codec", "copy"),
             "latency_ms": round((time.monotonic() - started) * 1000),
         }
 
 
 async def local_snapshot_worker() -> None:
     logger.info("Starting local core snapshot worker...")
-    await local_core.refresh_snapshot(include_storage=True)
+    try:
+        await local_core.refresh_snapshot(include_storage=True)
+    except Exception as e:
+        logger.error("Initial local core snapshot refresh error: %s", e)
+
     while True:
         try:
             await local_core.refresh_snapshot()
@@ -242,4 +293,3 @@ def _event_payload(event: SemanticEvent) -> dict[str, Any]:
 
 
 local_core = LocalCore()
-

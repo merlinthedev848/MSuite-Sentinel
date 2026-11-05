@@ -247,6 +247,7 @@ async def auth_and_security_middleware(request: Request, call_next):
         ("/ops-api", {"operations", "settings"}),
         ("/go2rtc", {"live", "settings"}),
         ("/system/live", {"live", "settings"}),
+        ("/system/storage-report", {"live", "playback", "events", "settings"}),
         ("/system", {"settings"}),
         ("/users", {"settings"}),
         ("/agent", {"operations", "settings"}),

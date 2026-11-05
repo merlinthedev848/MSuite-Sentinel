@@ -27,25 +27,37 @@ async def dependency_status(db=None) -> dict:
 
     def _tcp_open(host: str, port: int) -> bool:
         try:
-            with socket.create_connection((host, int(port)), timeout=1.5):
+            if not host or not port:
+                return False
+            with socket.create_connection((str(host), int(port)), timeout=1.5):
                 return True
-        except OSError:
+        except Exception:
             return False
 
-    mqtt_ok = await asyncio.to_thread(_tcp_open, settings.mqtt_broker, int(settings.mqtt_port))
+    mqtt_ok = False
+    try:
+        broker = getattr(settings, "mqtt_broker", "127.0.0.1") or "127.0.0.1"
+        port_val = getattr(settings, "mqtt_port", 1883)
+        port = int(port_val) if port_val else 1883
+        mqtt_ok = await asyncio.to_thread(_tcp_open, broker, port)
+    except Exception:
+        mqtt_ok = False
+
     go2rtc_ok = False
     try:
-        url = settings.go2rtc_url.rstrip("/")
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            response = await client.get(f"{url}/api/streams")
-            go2rtc_ok = response.status_code == 200
+        url = (getattr(settings, "go2rtc_url", "") or "").rstrip("/")
+        if url:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.get(f"{url}/api/streams")
+                go2rtc_ok = response.status_code == 200
     except Exception:
         go2rtc_ok = False
-    healthy = db_ok and mqtt_ok and go2rtc_ok
+
+    healthy = db_ok and (mqtt_ok or go2rtc_ok)
     return {
         "status": "online" if healthy else "degraded",
         "database_connected": db_ok,
         "mqtt_connected": mqtt_ok,
         "go2rtc_active": go2rtc_ok,
-        "record_codec": settings.record_video_codec,
+        "record_codec": getattr(settings, "record_video_codec", "copy"),
     }

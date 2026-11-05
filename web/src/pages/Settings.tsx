@@ -75,6 +75,19 @@ const restoreMaskedRtspPassword = (value: string, original: string) => {
   return originalPassword ? value.replace(PASSWORD_MASK, originalPassword) : value;
 };
 
+const formatErrorDetail = (err: any, fallback = 'Unknown error'): string => {
+  if (!err) return fallback;
+  if (typeof err === 'string') return err;
+  if (typeof err.detail === 'string') return err.detail;
+  if (Array.isArray(err.detail)) {
+    return err.detail.map((d: any) => d.msg || (typeof d === 'string' ? d : JSON.stringify(d))).join('; ');
+  }
+  if (err.detail && typeof err.detail === 'object') {
+    return JSON.stringify(err.detail);
+  }
+  return err.message || err.error || fallback;
+};
+
 const detectionObjects = ['person', 'car', 'truck', 'bus', 'motorcycle'];
 
 const createDetectionZone = (): DetectionZone => ({
@@ -801,7 +814,7 @@ const Settings: React.FC = () => {
         showToast('Camera adopted successfully!');
       } else {
         const err = await res.json().catch(() => ({}));
-        showToast(`Failed to adopt: ${err.detail || 'Unknown error'}`);
+        showToast(`Failed to adopt: ${formatErrorDetail(err)}`);
       }
     } catch {
       showToast('Network error while adopting.');
@@ -873,7 +886,7 @@ const Settings: React.FC = () => {
         showToast(editingId ? 'Camera updated successfully!' : 'Camera added successfully!');
       } else {
         const err = await res.json().catch(() => ({}));
-        setSaveError(err.detail || 'Failed to save camera.');
+        setSaveError(formatErrorDetail(err, 'Failed to save camera.'));
       }
     } catch {
       setSaveError('Network error.');

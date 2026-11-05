@@ -482,6 +482,8 @@ def get_default_rtsp_paths(manufacturer: str | None, model: str | None, ip: str,
 class AdoptCameraRequest(ONVIFDiscoveryResult):
     username: str = ""
     password: str = ""
+    name: Optional[str] = None
+    model_config = ConfigDict(extra="ignore")
 
 
 @router.post("/adopt", response_model=CameraResponse, status_code=201)
@@ -492,22 +494,35 @@ async def adopt_camera(
 ):
     """Probe a discovered device for RTSP streams, then save it."""
     _require_settings(request)
-    username = data.username
-    password = data.password
+    username = data.username or ""
+    password = data.password or ""
     import urllib.parse
     port = 80
+    ip = (data.ip or "").strip()
     if data.onvif_endpoint:
         try:
             parsed = urllib.parse.urlparse(data.onvif_endpoint)
             if parsed.port:
                 port = parsed.port
+            if not ip and parsed.hostname:
+                ip = parsed.hostname
         except Exception:
             pass
 
-    streams = await asyncio.to_thread(
-        onvif_service.get_camera_streams,
-        data.ip, port, username, password
-    )
+    if not ip:
+        raise HTTPException(400, "Camera IP address or valid ONVIF endpoint is required")
+
+    streams = None
+    try:
+        streams = await asyncio.wait_for(
+            asyncio.to_thread(
+                onvif_service.get_camera_streams,
+                ip, port, username, password
+            ),
+            timeout=4.0
+        )
+    except Exception as e:
+        log.warning("ONVIF stream probe timed out or failed for %s:%s: %s", ip, port, e)
 
     def inject_rtsp_credentials(rtsp_url: str | None, user: str, psw: str) -> str | None:
         if not rtsp_url or not user:
@@ -531,19 +546,20 @@ async def adopt_camera(
     else:
         # Fall back to manufacturer-specific defaults
         rtsp_main, rtsp_sub = get_default_rtsp_paths(
-            data.manufacturer, data.model, data.ip, username, password
+            data.manufacturer, data.model, ip, username, password
         )
         resolution = None
 
+    cam_name = data.name.strip() if data.name and data.name.strip() else f"{data.manufacturer} {data.model} ({ip})"
     cam = Camera(
-        name=f"{data.manufacturer} {data.model} ({data.ip})",
+        name=cam_name,
         rtsp_url_main=rtsp_main,
         rtsp_url_sub=rtsp_sub,
-        onvif_endpoint=data.onvif_endpoint,
+        onvif_endpoint=data.onvif_endpoint or f"http://{ip}:{port}/onvif/device_service",
         onvif_username=username,
         onvif_password=password,
-        manufacturer=data.manufacturer,
-        model=data.model,
+        manufacturer=data.manufacturer or "Generic",
+        model=data.model or "IP Camera",
         resolution=resolution,
         status="online",
         auto_adopted=True,

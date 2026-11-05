@@ -17,6 +17,8 @@ class CameraBase(BaseModel):
     enabled: bool = True
     config: Optional[Dict[str, Any]] = None
 
+    model_config = ConfigDict(extra="ignore")
+
 
 class CameraCreate(CameraBase):
     auto_adopted: bool = False
@@ -36,6 +38,8 @@ class CameraUpdate(BaseModel):
     config: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
 
+    model_config = ConfigDict(extra="ignore")
+
 
 class CameraResponse(CameraBase):
     id: str
@@ -44,13 +48,15 @@ class CameraResponse(CameraBase):
     created_at: datetime
     updated_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
 class ONVIFDiscoveryResult(BaseModel):
     id: Optional[str] = None
-    ip: str
+    ip: str = ""
     manufacturer: str = "Unknown"
     model: str = "Unknown"
-    onvif_endpoint: str
+    onvif_endpoint: str = ""
     status: str = "online"
+
+    model_config = ConfigDict(extra="ignore")

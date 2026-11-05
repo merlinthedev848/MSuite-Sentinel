@@ -80,10 +80,10 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
       try {
         const started = performance.now();
         const [c, e, h, s] = await Promise.all([
-          fetch(apiUrl('/cameras')).then(r => r.ok ? r.json() : null),
-          fetch(apiUrl('/events?limit=20')).then(r => r.ok ? r.json() : null),
-          fetch(apiUrl('/system/health')).then(r => r.ok ? r.json() : null),
-          fetch(apiUrl('/system/storage-report')).then(r => r.ok ? r.json() : null),
+          fetch(apiUrl('/cameras')).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(apiUrl('/events?limit=20')).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(apiUrl('/system/health')).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(apiUrl('/system/storage-report')).then(r => r.ok ? r.json() : null).catch(() => null),
         ]);
         if (Array.isArray(c) && c.length > 0) setCameras(c);
         else if (Array.isArray(c)) setCameras(prev => (prev.length > 0 ? prev : c));
@@ -96,7 +96,7 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
             up: typeof h.network?.up_mbps === 'number' ? h.network.up_mbps.toFixed(2) : prev.up,
             down: typeof h.network?.down_mbps === 'number' ? h.network.down_mbps.toFixed(2) : prev.down,
             latency: `${Math.round(performance.now() - started)}`,
-            network: h.status === 'online' ? 'OK' : 'DEGRADED',
+            network: h.status === 'online' ? 'OK' : (h.status ? 'DEGRADED' : prev.network),
             codec: h.record_codec || prev.codec,
           }));
         }
