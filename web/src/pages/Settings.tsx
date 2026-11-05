@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Trash2, Edit2, CheckCircle, X, Loader, ShieldCheck, KeyRound, Activity, Database } from 'lucide-react';
+import { Search, Plus, Trash2, Edit2, CheckCircle, X, Loader, ShieldCheck, KeyRound, Activity, Database, Zap } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
 
 interface Camera {
@@ -117,6 +117,11 @@ interface SystemConfig {
     ai_provider: string;
     gemini_api_key: string;
     openai_api_key: string;
+    custom_ai_url?: string;
+    custom_ai_key?: string;
+    custom_ai_model?: string;
+    ollama_url?: string;
+    ollama_model?: string;
   };
   network: {
     api_port: number;
@@ -197,6 +202,11 @@ const defaultSystemConfig: SystemConfig = {
     ai_provider: 'local',
     gemini_api_key: '',
     openai_api_key: '',
+    custom_ai_url: '',
+    custom_ai_key: '',
+    custom_ai_model: 'default',
+    ollama_url: 'http://localhost:11434',
+    ollama_model: 'llama3.2-vision',
   },
   network: {
     api_port: 8000,
@@ -233,6 +243,32 @@ const Settings: React.FC = () => {
   const [toast, setToast] = useState('');
   const [systemConfig, setSystemConfig] = useState<SystemConfig>(defaultSystemConfig);
   const [savingConfig, setSavingConfig] = useState(false);
+  const [testingAi, setTestingAi] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; latency_ms: number; message: string; models_found?: string[] } | null>(null);
+
+  const testAiConnection = async () => {
+    setTestingAi(true);
+    setAiTestResult(null);
+    try {
+      const res = await fetch(apiUrl('/ops-api/ai/test-connection'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: systemConfig.ai.ai_provider,
+          url: systemConfig.ai.ai_provider === 'ollama' ? systemConfig.ai.ollama_url : systemConfig.ai.custom_ai_url,
+          key: systemConfig.ai.ai_provider === 'custom' ? systemConfig.ai.custom_ai_key : (systemConfig.ai.ai_provider === 'gemini' ? systemConfig.ai.gemini_api_key : systemConfig.ai.openai_api_key),
+          model: systemConfig.ai.ai_provider === 'ollama' ? systemConfig.ai.ollama_model : systemConfig.ai.custom_ai_model,
+        })
+      });
+      const data = await res.json();
+      setAiTestResult(data);
+    } catch (err: any) {
+      setAiTestResult({ ok: false, latency_ms: 0, message: err.message || 'Connection test failed' });
+    } finally {
+      setTestingAi(false);
+    }
+  };
+
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [usersError, setUsersError] = useState('');
   const [editingUser, setEditingUser] = useState<UserAccount | null>(null);
@@ -1393,6 +1429,8 @@ const Settings: React.FC = () => {
                       onChange={e => setSystemConfig(c => ({ ...c, ai: { ...c.ai, ai_provider: e.target.value } }))}
                     >
                       <option value="local">Local Rule-Based (No API Keys needed)</option>
+                      <option value="ollama">Ollama (Self-Hosted Vision & LLM)</option>
+                      <option value="custom">Custom AI Endpoint (vLLM / LM Studio / LocalAI / OpenAI-Compatible)</option>
                       <option value="gemini">Google Gemini VLM (Gemini 1.5 Flash)</option>
                       <option value="openai">OpenAI GPT VLM (GPT-4o mini)</option>
                     </select>
@@ -1432,6 +1470,92 @@ const Settings: React.FC = () => {
                       </div>
                     </div>
                   )}
+
+                  {systemConfig.ai.ai_provider === 'ollama' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                      <div className="form-group">
+                        <label className="form-label">Ollama Host URL</label>
+                        <input
+                          className="form-input"
+                          value={systemConfig.ai.ollama_url || 'http://localhost:11434'}
+                          onChange={e => setSystemConfig(c => ({ ...c, ai: { ...c.ai, ollama_url: e.target.value } }))}
+                          placeholder="http://localhost:11434"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Ollama Model</label>
+                        <input
+                          className="form-input"
+                          value={systemConfig.ai.ollama_model || 'llama3.2-vision'}
+                          onChange={e => setSystemConfig(c => ({ ...c, ai: { ...c.ai, ollama_model: e.target.value } }))}
+                          placeholder="llama3.2-vision or moondream"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {systemConfig.ai.ai_provider === 'custom' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+                        <div className="form-group">
+                          <label className="form-label">OpenAI-Compatible Base URL</label>
+                          <input
+                            className="form-input"
+                            value={systemConfig.ai.custom_ai_url || ''}
+                            onChange={e => setSystemConfig(c => ({ ...c, ai: { ...c.ai, custom_ai_url: e.target.value } }))}
+                            placeholder="http://192.168.1.100:8000/v1"
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">Model Identifier</label>
+                          <input
+                            className="form-input"
+                            value={systemConfig.ai.custom_ai_model || 'default'}
+                            onChange={e => setSystemConfig(c => ({ ...c, ai: { ...c.ai, custom_ai_model: e.target.value } }))}
+                            placeholder="e.g. meta-llama/Llama-3.2-11B-Vision"
+                          />
+                        </div>
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Custom API Key / Bearer Token (Optional)</label>
+                        <div style={{ position: 'relative' }}>
+                          <input
+                            className="form-input"
+                            type="password"
+                            value={systemConfig.ai.custom_ai_key || ''}
+                            onChange={e => setSystemConfig(c => ({ ...c, ai: { ...c.ai, custom_ai_key: e.target.value } }))}
+                            placeholder="Optional authentication bearer token..."
+                          />
+                          <KeyRound size={14} style={{ position: 'absolute', right: 12, top: 12, color: 'var(--t3)' }} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* AI Connection Probe & Status Banner */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, padding: 12, background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={testAiConnection}
+                      disabled={testingAi}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      {testingAi ? <Loader size={14} className="spin" /> : <Zap size={14} color="#00d2ff" />}
+                      {testingAi ? 'Testing Latency...' : 'Test AI Connection & Latency'}
+                    </button>
+                    {aiTestResult && (
+                      <div style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 8, color: aiTestResult.ok ? '#2ed573' : '#ff4757' }}>
+                        {aiTestResult.ok ? <CheckCircle size={15} /> : <X size={15} />}
+                        <span>{aiTestResult.message}</span>
+                        {aiTestResult.models_found && aiTestResult.models_found.length > 0 && (
+                          <span style={{ color: 'var(--t3)', fontSize: '0.75rem' }}>
+                            (Available: {aiTestResult.models_found.slice(0, 3).join(', ')})
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <button className="btn btn-primary" style={{ width: 'fit-content' }} onClick={() => saveSystemConfig()} disabled={savingConfig}>

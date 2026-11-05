@@ -195,6 +195,31 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("SENTINEL_OPENAI_API_KEY", "OPENAI_API_KEY"),
     )
+    custom_ai_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("SENTINEL_CUSTOM_AI_URL", "CUSTOM_AI_URL"),
+        description="Base URL for custom OpenAI-compatible vision/LLM endpoint, e.g. http://localhost:8000/v1",
+    )
+    custom_ai_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("SENTINEL_CUSTOM_AI_KEY", "CUSTOM_AI_KEY"),
+        description="Optional API key or Bearer token for custom AI endpoint",
+    )
+    custom_ai_model: str = Field(
+        default="default",
+        validation_alias=AliasChoices("SENTINEL_CUSTOM_AI_MODEL", "CUSTOM_AI_MODEL"),
+        description="Model identifier to query on custom AI endpoint",
+    )
+    ollama_url: str = Field(
+        default="http://localhost:11434",
+        validation_alias=AliasChoices("SENTINEL_OLLAMA_URL", "OLLAMA_URL"),
+        description="Base URL for Ollama instance",
+    )
+    ollama_model: str = Field(
+        default="llama3.2-vision",
+        validation_alias=AliasChoices("SENTINEL_OLLAMA_MODEL", "OLLAMA_MODEL"),
+        description="Ollama vision or chat model name",
+    )
 
     # ── Camera YAML config (loaded from sentinel.yml) ───────────────────
     cameras_config: list[dict[str, Any]] = Field(default_factory=list)
@@ -227,6 +252,11 @@ _YAML_FIELDS = {
     "ai_provider": ("SENTINEL_AI_PROVIDER", "AI_PROVIDER"),
     "gemini_api_key": ("SENTINEL_GEMINI_API_KEY", "GEMINI_API_KEY"),
     "openai_api_key": ("SENTINEL_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    "custom_ai_url": ("SENTINEL_CUSTOM_AI_URL", "CUSTOM_AI_URL"),
+    "custom_ai_key": ("SENTINEL_CUSTOM_AI_KEY", "CUSTOM_AI_KEY"),
+    "custom_ai_model": ("SENTINEL_CUSTOM_AI_MODEL", "CUSTOM_AI_MODEL"),
+    "ollama_url": ("SENTINEL_OLLAMA_URL", "OLLAMA_URL"),
+    "ollama_model": ("SENTINEL_OLLAMA_MODEL", "OLLAMA_MODEL"),
     "recordings_dir": ("SENTINEL_RECORDINGS_DIR", "RECORDINGS_DIR"),
     "go2rtc_url": ("SENTINEL_GO2RTC_URL", "GO2RTC_URL"),
 }
@@ -259,6 +289,11 @@ def _flatten_yaml(data: dict[str, Any]) -> dict[str, Any]:
         "ai_provider": ai.get("provider") or ai.get("ai_provider"),
         "gemini_api_key": ai.get("gemini_api_key"),
         "openai_api_key": ai.get("openai_api_key"),
+        "custom_ai_url": ai.get("custom_ai_url"),
+        "custom_ai_key": ai.get("custom_ai_key"),
+        "custom_ai_model": ai.get("custom_ai_model"),
+        "ollama_url": ai.get("ollama_url"),
+        "ollama_model": ai.get("ollama_model"),
     }
     flat = {key: value for key, value in mapped.items() if value not in (None, "")}
     cameras = data.get("cameras")

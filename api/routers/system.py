@@ -37,6 +37,11 @@ class AIConfig(BaseModel):
     ai_provider: str = "local"
     gemini_api_key: str = ""
     openai_api_key: str = ""
+    custom_ai_url: str = ""
+    custom_ai_key: str = ""
+    custom_ai_model: str = "default"
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2-vision"
 
 
 class NetworkConfig(BaseModel):
@@ -93,6 +98,11 @@ def _compose_config(data: dict) -> SystemConfigUpdate:
             ai_provider=ai.get("ai_provider", settings.ai_provider),
             gemini_api_key=ai.get("gemini_api_key", settings.gemini_api_key),
             openai_api_key=ai.get("openai_api_key", settings.openai_api_key),
+            custom_ai_url=ai.get("custom_ai_url", getattr(settings, "custom_ai_url", "")),
+            custom_ai_key=ai.get("custom_ai_key", getattr(settings, "custom_ai_key", "")),
+            custom_ai_model=ai.get("custom_ai_model", getattr(settings, "custom_ai_model", "default")),
+            ollama_url=ai.get("ollama_url", getattr(settings, "ollama_url", "http://localhost:11434")),
+            ollama_model=ai.get("ollama_model", getattr(settings, "ollama_model", "llama3.2-vision")),
         ),
         network=NetworkConfig(
             api_port=network.get("api_port", 8000),
@@ -497,6 +507,11 @@ async def update_system_config(config: SystemConfigUpdate):
     settings.ai_provider = config.ai.ai_provider
     settings.gemini_api_key = config.ai.gemini_api_key
     settings.openai_api_key = config.ai.openai_api_key
+    settings.custom_ai_url = config.ai.custom_ai_url
+    settings.custom_ai_key = config.ai.custom_ai_key
+    settings.custom_ai_model = config.ai.custom_ai_model
+    settings.ollama_url = config.ai.ollama_url
+    settings.ollama_model = config.ai.ollama_model
 
     return {"status": "success", **config.model_dump()}
 

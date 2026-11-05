@@ -13,10 +13,15 @@ import {
   Shield,
   Trash2,
   Video,
+  Sparkles,
+  Cpu,
+  Zap,
+  Scan,
+  CheckCircle2,
 } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
 
-type Tab = 'health' | 'nvrs' | 'rules' | 'privacy' | 'review';
+type Tab = 'health' | 'nvrs' | 'rules' | 'privacy' | 'review' | 'smart_ai';
 
 const emptyNvr = {
   name: 'Existing NVR',
@@ -79,6 +84,83 @@ const Operations: React.FC = () => {
   const [privacyForm, setPrivacyForm] = useState<any>(emptyPrivacy);
   const [events, setEvents] = useState<any[]>([]);
   const [reviews, setReviews] = useState<Record<string, any>>({});
+  const [aiStatus, setAiStatus] = useState<{ provider: string; model: string; endpoint: string; is_configured: boolean; capabilities: string[] } | null>(null);
+  const [selectedAiCamera, setSelectedAiCamera] = useState<string>('');
+  const [aiPrompt, setAiPrompt] = useState<string>('');
+  const [aiAnalyzing, setAiAnalyzing] = useState<boolean>(false);
+  const [aiAnalysisResult, setAiAnalysisResult] = useState<{ camera_id: string; threat_level: string; description: string; engine: string; suggested_actions: string[]; thumbnail_b64?: string; timestamp: string } | null>(null);
+  const [aiLatency, setAiLatency] = useState<number | null>(null);
+  const [aiTestingLatency, setAiTestingLatency] = useState<boolean>(false);
+
+  const fetchAiStatus = async () => {
+    try {
+      const res = await fetch(apiUrl('/ops-api/ai/status'));
+      if (res.ok) {
+        const data = await res.json();
+        setAiStatus(data);
+      }
+    } catch {
+      // quiet fail
+    }
+  };
+
+  const probeAiLatency = async () => {
+    setAiTestingLatency(true);
+    try {
+      const res = await fetch(apiUrl('/ops-api/ai/test-connection'), { method: 'POST' });
+      const data = await res.json();
+      if (data.ok && data.latency_ms !== undefined) {
+        setAiLatency(data.latency_ms);
+        setToast(`AI Engine verified: ${data.latency_ms}ms latency`);
+      } else {
+        setToast(data.message || 'AI latency probe failed');
+      }
+    } catch (e: any) {
+      setToast('AI probe error: ' + e.message);
+    } finally {
+      setAiTestingLatency(false);
+    }
+  };
+
+  const analyzeCameraFrame = async () => {
+    const camId = selectedAiCamera || (cameras[0]?.id ?? '');
+    if (!camId) {
+      setToast('Please configure or select a camera first');
+      return;
+    }
+    setAiAnalyzing(true);
+    try {
+      const custom_objects = aiPrompt ? aiPrompt.split(',').map(s => s.trim()).filter(Boolean) : ['person', 'motion', 'activity'];
+      const res = await fetch(apiUrl('/ops-api/ai/analyze-frame'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          camera_id: camId,
+          custom_objects,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAiAnalysisResult(data);
+        setToast(`Frame analyzed by ${data.engine}: ${data.threat_level} risk`);
+      } else {
+        setToast('AI frame analysis failed');
+      }
+    } catch (e: any) {
+      setToast('Analysis failed: ' + e.message);
+    } finally {
+      setAiAnalyzing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tab === 'smart_ai') {
+      fetchAiStatus();
+      if (!selectedAiCamera && cameras.length > 0) {
+        setSelectedAiCamera(cameras[0].id);
+      }
+    }
+  }, [tab, cameras]);
 
   const notify = (message: string) => {
     setToast(message);
@@ -235,6 +317,7 @@ const Operations: React.FC = () => {
             ['health', HeartPulse, 'Health'],
             ['nvrs', Network, 'NVRs'],
             ['rules', BellRing, 'Rules'],
+            ['smart_ai', Sparkles, 'Smart AI Ops'],
             ['privacy', EyeOff, 'Privacy'],
             ['review', Shield, 'Review'],
           ].map(([id, Icon, label]) => {
@@ -389,6 +472,253 @@ const Operations: React.FC = () => {
                 ))}
               </div>
             </>
+          )}
+
+          {tab === 'smart_ai' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              {/* AI Engine Status Card */}
+              <div className="card" style={{ padding: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 10,
+                      background: 'rgba(0, 210, 255, 0.1)',
+                      border: '1px solid rgba(0, 210, 255, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}>
+                      <Cpu size={22} color="var(--cyan)" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span>Connected AI Engine:</span>
+                        <span style={{ color: 'var(--cyan)', textTransform: 'capitalize' }}>
+                          {aiStatus?.provider === 'custom' ? 'Custom OpenAI-Compatible' : (aiStatus?.provider || 'Local Rule-Based')}
+                        </span>
+                        <span className={`badge ${aiStatus?.is_configured ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.65rem' }}>
+                          {aiStatus?.is_configured ? 'Active' : 'Unconfigured'}
+                        </span>
+                      </div>
+                      <div style={{ color: 'var(--t3)', fontSize: '0.78rem', marginTop: 2 }}>
+                        Model: <strong style={{ color: 'var(--t1)' }}>{aiStatus?.model || 'default'}</strong> · Endpoint: <code style={{ color: 'var(--cyan)' }}>{aiStatus?.endpoint || 'internal'}</code>
+                        {aiLatency !== null && <span style={{ marginLeft: 8, color: '#2ed573' }}>· Latency: {aiLatency}ms</span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button className="btn btn-secondary" onClick={probeAiLatency} disabled={aiTestingLatency} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Zap size={14} color="var(--cyan)" />
+                      {aiTestingLatency ? 'Pinging...' : 'Probe Latency'}
+                    </button>
+                    <button className="btn btn-primary" onClick={analyzeCameraFrame} disabled={aiAnalyzing} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Scan size={14} />
+                      {aiAnalyzing ? 'Inspecting...' : 'Analyze Live Frame'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Capabilities pills */}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--t3)', display: 'flex', alignItems: 'center' }}>Capabilities:</span>
+                  {(aiStatus?.capabilities || ['live_scene_analysis', 'threat_rating', 'smart_triage', 'tool_calling']).map(cap => (
+                    <span key={cap} style={{
+                      fontSize: '0.68rem',
+                      padding: '2px 8px',
+                      borderRadius: 4,
+                      background: 'rgba(255, 255, 255, 0.04)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--t2)',
+                      textTransform: 'capitalize',
+                    }}>
+                      ✓ {cap.replace(/_/g, ' ')}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Live AI Frame Inspection Console */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) minmax(360px, 1.4fr)', gap: 20 }}>
+                {/* Inspection Controls & Snapshot Preview */}
+                <div className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.92rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Sparkles size={16} color="var(--cyan)" />
+                    <span>Live Frame Inspection</span>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Select Camera Feed</label>
+                    <select
+                      className="form-select"
+                      value={selectedAiCamera || (cameras[0]?.id ?? '')}
+                      onChange={e => setSelectedAiCamera(e.target.value)}
+                    >
+                      {cameras.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name || c.id} ({c.status})
+                        </option>
+                      ))}
+                      {cameras.length === 0 && <option value="">No cameras registered</option>}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Detection Focus / Targeted Classes (Optional)</label>
+                    <input
+                      className="form-input"
+                      placeholder="e.g. person, package, vehicle, suspicious motion"
+                      value={aiPrompt}
+                      onChange={e => setAiPrompt(e.target.value)}
+                    />
+                    <div style={{ fontSize: '0.68rem', color: 'var(--t3)', marginTop: 4 }}>
+                      Override standard classes with comma-separated targets for specialized scene inspection.
+                    </div>
+                  </div>
+
+                  <button
+                    className="btn btn-primary"
+                    style={{ width: '100%', justifyContent: 'center' }}
+                    onClick={analyzeCameraFrame}
+                    disabled={aiAnalyzing}
+                  >
+                    <Scan size={15} />
+                    {aiAnalyzing ? 'Querying AI Vision Pipeline...' : 'Capture & Inspect Live Frame'}
+                  </button>
+
+                  {/* Frame preview */}
+                  {aiAnalysisResult?.thumbnail_b64 ? (
+                    <div style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', background: '#000', maxHeight: 220, position: 'relative' }}>
+                      <img
+                        src={`data:image/jpeg;base64,${aiAnalysisResult.thumbnail_b64}`}
+                        alt="Captured Camera Frame"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                      <div style={{
+                        position: 'absolute',
+                        top: 8,
+                        left: 8,
+                        background: 'rgba(0,0,0,0.7)',
+                        padding: '3px 8px',
+                        borderRadius: 4,
+                        fontSize: '0.65rem',
+                        color: 'var(--t2)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                      }}>
+                        Live Snapshot
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{
+                      borderRadius: 8,
+                      border: '1px dashed var(--border)',
+                      padding: 24,
+                      textAlign: 'center',
+                      color: 'var(--t3)',
+                      fontSize: '0.8rem',
+                    }}>
+                      Click "Capture & Inspect Live Frame" to test vision inference against your selected camera.
+                    </div>
+                  )}
+                </div>
+
+                {/* AI Assessment & Action Suggestions */}
+                <div className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.92rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <CheckCircle2 size={16} color="#2ed573" />
+                    <span>AI Threat Intelligence & Action Suggestions</span>
+                  </div>
+
+                  {aiAnalysisResult ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      {/* Threat Badge Row */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 12, background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--t2)' }}>Evaluated Threat Level:</span>
+                        <span style={{
+                          padding: '4px 12px',
+                          borderRadius: 6,
+                          fontWeight: 800,
+                          fontSize: '0.85rem',
+                          background: aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? 'rgba(255, 71, 87, 0.15)' : (aiAnalysisResult.threat_level === 'MEDIUM' ? 'rgba(255, 165, 2, 0.15)' : 'rgba(46, 213, 115, 0.15)'),
+                          border: `1px solid ${aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? '#ff4757' : (aiAnalysisResult.threat_level === 'MEDIUM' ? '#ffa502' : '#2ed573')}`,
+                          color: aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? '#ff4757' : (aiAnalysisResult.threat_level === 'MEDIUM' ? '#ffa502' : '#2ed573'),
+                        }}>
+                          {aiAnalysisResult.threat_level}
+                        </span>
+                      </div>
+
+                      {/* Scene Description */}
+                      <div style={{ padding: 14, background: 'rgba(0, 210, 255, 0.03)', borderRadius: 8, border: '1px solid rgba(0, 210, 255, 0.15)' }}>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--cyan)', fontWeight: 700, textTransform: 'uppercase', marginBottom: 6 }}>
+                          AI Visual Scene Summary
+                        </div>
+                        <div style={{ fontSize: '0.92rem', color: 'var(--t1)', lineHeight: 1.5 }}>
+                          "{aiAnalysisResult.description}"
+                        </div>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--t3)', marginTop: 8 }}>
+                          Inference Engine: <code>{aiAnalysisResult.engine}</code> · Analyzed at {new Date(aiAnalysisResult.timestamp).toLocaleTimeString()}
+                        </div>
+                      </div>
+
+                      {/* Suggested Actions */}
+                      <div>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--t2)', marginBottom: 8 }}>
+                          Recommended Automated Operations:
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {aiAnalysisResult.suggested_actions.map(action => (
+                            <div key={action} style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '8px 12px',
+                              borderRadius: 6,
+                              background: 'rgba(255,255,255,0.02)',
+                              border: '1px solid var(--border)',
+                              fontSize: '0.78rem',
+                            }}>
+                              <span style={{ textTransform: 'capitalize', color: 'var(--t1)' }}>
+                                ⚡ {action.replace(/_/g, ' ')}
+                              </span>
+                              <span style={{ fontSize: '0.65rem', color: 'var(--t3)' }}>Automated Policy</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{
+                      padding: 32,
+                      textAlign: 'center',
+                      color: 'var(--t3)',
+                      fontSize: '0.85rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}>
+                      <Sparkles size={28} color="var(--border)" />
+                      <div>No inspection run yet</div>
+                      <div style={{ fontSize: '0.75rem', maxWidth: 300 }}>
+                        Select a camera on the left and click "Capture & Inspect Live Frame" to run visual triage.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Explanatory Smart Triage Integration Info */}
+              <div className="card" style={{ padding: 18, background: 'rgba(255,255,255,0.015)' }}>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: 6, color: 'var(--cyan)' }}>
+                  How Smart Operations Leverages Your AI
+                </div>
+                <div style={{ color: 'var(--t2)', fontSize: '0.78rem', lineHeight: 1.6 }}>
+                  When you connect your custom AI (Ollama, vLLM, LM Studio, or OpenAI-compatible endpoint), Sentinel's real-time detection pipeline automatically dispatches ambiguous or high-confidence YOLO detections through your model. The AI determines whether activity constitutes a genuine threat (e.g., unauthorized intruder, perimeter breach) versus benign environmental motion (shadows, windblown trees, pets), eliminating false alarms before triggering Alert Rules or sending notifications.
+                </div>
+              </div>
+            </div>
           )}
 
           {tab === 'privacy' && (

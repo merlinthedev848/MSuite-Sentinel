@@ -387,6 +387,159 @@ async def handle_openai_agent(req: ChatRequest, db: AsyncSession, can_change_set
         logger.error(f"OpenAI agent failed: {type(e).__name__}")
         return {"response": "Failed to execute OpenAI agent request."}
 
+
+async def handle_custom_agent(req: ChatRequest, db: AsyncSession, can_change_settings: bool = False, is_ollama: bool = False) -> dict:
+    if is_ollama:
+        base = getattr(settings, "ollama_url", "http://localhost:11434").rstrip("/")
+        url = f"{base}/v1/chat/completions"
+        model = getattr(settings, "ollama_model", "llama3.2-vision") or "llama3.2-vision"
+        headers = {"Content-Type": "application/json"}
+    else:
+        base = getattr(settings, "custom_ai_url", "").rstrip("/")
+        if not base:
+            return await handle_fallback_agent(req.message, db)
+        url = base if base.endswith("/chat/completions") else f"{base}/chat/completions"
+        model = getattr(settings, "custom_ai_model", "default") or "default"
+        headers = {"Content-Type": "application/json"}
+        api_key = getattr(settings, "custom_ai_key", "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are the Sentinel NVR Active AI Operator. You have direct control over camera configuration, "
+                "system health query, and settings. Be concise, actionable, and professional. Always notify the user "
+                "when you execute actions."
+            )
+        }
+    ]
+    for item in req.history:
+        raw_role = item.get("role", "user")
+        role = "assistant" if raw_role in ("model", "assistant") else "user"
+        content_text = item.get("content", "")
+        if content_text:
+            messages.append({"role": role, "content": content_text})
+    messages.append({"role": "user", "content": req.message})
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_system_health",
+                "description": "Get NVR system health, including CPU, memory, and disk usage."
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_cameras",
+                "description": "List all configured cameras with their IDs, names, and online status."
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_camera",
+                "description": "Rename a camera or change its location. Stream URLs are changed in Settings.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "camera_id": {"type": "string", "description": "The unique UUID of the camera."},
+                        "name": {"type": "string", "description": "New name of the camera."},
+                        "location": {"type": "string", "description": "New location of the camera."}
+                    },
+                    "required": ["camera_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_system_config",
+                "description": "Update system configuration settings like video retention days.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "retention_days": {"type": "integer", "description": "Number of days to keep video recordings."}
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_recent_events",
+                "description": "Retrieve recent AI security events log.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "description": "Maximum number of events to return."}
+                    }
+                }
+            }
+        }
+    ]
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "tools": tools
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            # If server doesn't support tools schema, retry plain chat
+            if resp.status_code in (400, 422) and "tools" in resp.text.lower():
+                payload.pop("tools", None)
+                resp = await client.post(url, headers=headers, json=payload)
+
+            if resp.status_code != 200:
+                logger.error(f"Custom AI Agent returned status {resp.status_code}: {resp.text[:200]}")
+                return {"response": f"AI endpoint returned ({resp.status_code}): {resp.text[:180]}"}
+
+            data = resp.json()
+            message = data["choices"][0]["message"]
+            tool_calls = message.get("tool_calls", [])
+
+            if tool_calls:
+                messages.append(message)
+                for call in tool_calls:
+                    func_name = call.get("function", {}).get("name", "")
+                    try:
+                        func_args = json.loads(call.get("function", {}).get("arguments") or "{}")
+                    except Exception:
+                        func_args = {}
+
+                    logger.info(f"Custom AI Operator triggered function: {func_name} with {func_args}")
+                    tool_result = await execute_tool(func_name, func_args, db, can_change_settings)
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.get("id", "call_1"),
+                        "name": func_name,
+                        "content": tool_result
+                    })
+
+                payload = {
+                    "model": model,
+                    "messages": messages
+                }
+                resp2 = await client.post(url, headers=headers, json=payload)
+                if resp2.status_code == 200:
+                    data2 = resp2.json()
+                    final_text = data2["choices"][0]["message"].get("content") or "Action executed."
+                    return {"response": final_text}
+                else:
+                    return {"response": f"Successfully performed action, but follow-up summary failed: {resp2.text[:180]}"}
+            else:
+                return {"response": message.get("content") or "Operation processed."}
+    except Exception as e:
+        logger.error(f"Custom AI Agent failed: {e}")
+        return {"response": f"Failed to connect to AI engine: {e}"}
+
 async def handle_fallback_agent(message: str, db: AsyncSession) -> dict:
     msg = message.lower()
     if "health" in msg or "system" in msg:
@@ -418,4 +571,8 @@ async def chat_agent(req: ChatRequest, request: Request, db: AsyncSession = Depe
         return await handle_gemini_agent(req, db, can_change_settings)
     elif provider == "openai" and settings.openai_api_key:
         return await handle_openai_agent(req, db, can_change_settings)
+    elif provider == "ollama":
+        return await handle_custom_agent(req, db, can_change_settings, is_ollama=True)
+    elif provider == "custom" and getattr(settings, "custom_ai_url", ""):
+        return await handle_custom_agent(req, db, can_change_settings, is_ollama=False)
     return await handle_fallback_agent(req.message, db)

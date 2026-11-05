@@ -46,6 +46,8 @@ class VLMService:
             return await self._analyze_openai(image_bytes, classes_str)
         elif provider == "ollama":
             return await self._analyze_ollama(image_bytes, classes_str)
+        elif provider == "custom" and getattr(settings, "custom_ai_url", ""):
+            return await self._analyze_custom(image_bytes, classes_str)
         
         # Local rule-based analyzer when no cloud or local VLM is selected
         result = self._local_fallback(detected_classes)
@@ -196,6 +198,66 @@ class VLMService:
                 logger.error(f"OpenAI API returned status {resp.status_code}: {resp.text}")
         except Exception as e:
             logger.error(f"Failed to analyze frame with OpenAI: {e}")
+
+        return self._local_fallback(classes_str.split(", "))
+
+    async def _analyze_custom(self, image_bytes: bytes, classes_str: str) -> dict:
+        """Query custom OpenAI-compatible vision endpoint (e.g. vLLM, LM Studio, LocalAI, LiteLLM)."""
+        base_url = getattr(settings, "custom_ai_url", "").rstrip("/")
+        if not base_url:
+            return self._local_fallback(classes_str.split(", "))
+
+        # Normalize endpoint path
+        url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+        api_key = getattr(settings, "custom_ai_key", "")
+        model = getattr(settings, "custom_ai_model", "") or "default"
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        b64_data = base64.b64encode(image_bytes).decode("utf-8")
+        prompt = (
+            f"Analyze this security camera frame. YOLO detected: {classes_str}. "
+            "Describe the scene and any activity in a single short sentence (max 15 words). "
+            "Assess the threat level as LOW, MEDIUM, or HIGH based on safety/security risk. "
+            "You MUST return JSON matching this exact structure: "
+            '{"description": "...", "threat_level": "LOW|MEDIUM|HIGH"}'
+        )
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{b64_data}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "response_format": {"type": "json_object"}
+        }
+
+        try:
+            client = await self._get_client()
+            resp = await client.post(url, headers=headers, json=payload, timeout=15.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data["choices"][0]["message"]["content"]
+                parsed = json.loads(self._clean_json_text(text))
+                if isinstance(parsed, dict) and "description" in parsed:
+                    parsed["engine"] = f"custom-{model}"
+                    return parsed
+            else:
+                logger.error(f"Custom AI API returned status {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            logger.error(f"Failed to analyze frame with Custom AI: {e}")
 
         return self._local_fallback(classes_str.split(", "))
 
