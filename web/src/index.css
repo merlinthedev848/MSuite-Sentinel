@@ -339,6 +339,7 @@ body {
 .cam-grid.g1 { grid-template-columns: 1fr; }
 .cam-grid.g4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 .cam-grid.g9 { grid-template-columns: repeat(3,1fr); grid-template-rows: repeat(3,1fr); }
+.cam-grid.g16 { grid-template-columns: repeat(4,1fr); grid-template-rows: repeat(4,1fr); }
 
 .cam-cell {
   position: relative;

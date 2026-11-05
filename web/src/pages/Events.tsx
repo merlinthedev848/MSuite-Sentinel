@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, Search, Sparkles, X, Play, Camera as CamIcon } from 'lucide-react';
+import { Bell, Search, Sparkles, X, Play, Camera as CamIcon, Download, Check, AlertCircle } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
 
 const Events: React.FC = () => {
@@ -10,6 +10,8 @@ const Events: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [classFilter, setClassFilter] = useState<string>('all');
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('all');
+  const [reviewMap, setReviewMap] = useState<Record<string, string>>({});
   const navigate = useNavigate();
 
   const loadEvents = async () => {
@@ -90,15 +92,53 @@ const Events: React.FC = () => {
   };
 
   const filteredEvents = useMemo(() => {
-    if (classFilter === 'all') return events;
     return events.filter(ev => {
+      if (selectedCameraId !== 'all' && ev.camera_id !== selectedCameraId) {
+        return false;
+      }
+      if (classFilter === 'all') return true;
       const cls = (ev.object_class ?? ev.event_type ?? '').toLowerCase();
       if (classFilter === 'vehicle') {
         return ['vehicle', 'car', 'truck', 'bus', 'motorcycle', 'bicycle'].includes(cls);
       }
       return cls === classFilter;
     });
-  }, [events, classFilter]);
+  }, [events, classFilter, selectedCameraId]);
+
+  const handleReview = async (e: React.MouseEvent, eventId: string, verdict: 'useful' | 'false_positive') => {
+    e.stopPropagation();
+    try {
+      setReviewMap(prev => ({ ...prev, [eventId]: verdict }));
+      await fetch(apiUrl('/ops-api/event-reviews'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id: eventId, verdict, notes: 'Quick reviewed from Event Log' }),
+      });
+    } catch (err) {
+      console.warn('Failed to record verdict:', err);
+    }
+  };
+
+  const exportCsv = () => {
+    if (filteredEvents.length === 0) return;
+    const headers = ['ID', 'Timestamp', 'Camera', 'Object', 'Confidence', 'Match Score'];
+    const rows = filteredEvents.map(ev => [
+      ev.id || '',
+      ev.timestamp || ev.created_at || '',
+      cameraNameById[ev.camera_id] || ev.camera_id || '',
+      ev.object_class || ev.event_type || '',
+      ev.confidence != null ? Math.round(ev.confidence * 100) + '%' : '',
+      ev.match_score != null ? Math.round(ev.match_score * 100) + '%' : '',
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `events_export_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const typeColor = (cls: string) => {
     if (!cls) return 'var(--t3)';
@@ -164,7 +204,31 @@ const Events: React.FC = () => {
           </button>
         </form>
 
-        <span style={{ fontSize: '0.76rem', color: 'var(--t2)' }}>{filteredEvents.length} events</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <select
+            className="form-input"
+            value={selectedCameraId}
+            onChange={e => setSelectedCameraId(e.target.value)}
+            style={{ height: 32, padding: '0 8px', fontSize: '0.74rem', minWidth: 130 }}
+          >
+            <option value="all">All Cameras</option>
+            {cameras.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={exportCsv}
+            title="Export filtered events to CSV"
+            style={{ height: 32, padding: '0 10px', fontSize: '0.74rem', display: 'flex', gap: 4, alignItems: 'center' }}
+          >
+            <Download size={13} /> Export CSV
+          </button>
+
+          <span style={{ fontSize: '0.76rem', color: 'var(--t2)', marginLeft: 4 }}>{filteredEvents.length} events</span>
+        </div>
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: '12px 20px' }}>
@@ -257,6 +321,50 @@ const Events: React.FC = () => {
                       hour: '2-digit', minute: '2-digit', second: '2-digit'
                     })}
                   </span>
+
+                  {ev.id && (
+                    <div style={{ display: 'flex', gap: 4, marginLeft: 8 }} onClick={e => e.stopPropagation()}>
+                      <button
+                        className="btn-ghost"
+                        title="Mark as Useful / Confirmed"
+                        onClick={(e) => handleReview(e, ev.id, 'useful')}
+                        style={{
+                          border: reviewMap[ev.id] === 'useful' ? '1px solid var(--green)' : '1px solid transparent',
+                          background: reviewMap[ev.id] === 'useful' ? 'var(--green-dim)' : 'transparent',
+                          color: reviewMap[ev.id] === 'useful' ? 'var(--green)' : 'var(--t3)',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          fontSize: '0.68rem',
+                        }}
+                      >
+                        <Check size={11} /> {reviewMap[ev.id] === 'useful' ? 'Verified' : ''}
+                      </button>
+                      <button
+                        className="btn-ghost"
+                        title="Mark as False Positive"
+                        onClick={(e) => handleReview(e, ev.id, 'false_positive')}
+                        style={{
+                          border: reviewMap[ev.id] === 'false_positive' ? '1px solid var(--red)' : '1px solid transparent',
+                          background: reviewMap[ev.id] === 'false_positive' ? 'var(--red-dim)' : 'transparent',
+                          color: reviewMap[ev.id] === 'false_positive' ? 'var(--red)' : 'var(--t3)',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          fontSize: '0.68rem',
+                        }}
+                      >
+                        <AlertCircle size={11} /> {reviewMap[ev.id] === 'false_positive' ? 'False' : ''}
+                      </button>
+                    </div>
+                  )}
+
                   {ev.camera_id && (
                     <Play size={13} color="var(--cyan)" style={{ marginLeft: 6, opacity: 0.75, flexShrink: 0 }} />
                   )}

@@ -372,7 +372,7 @@ const LiveView: React.FC = () => {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [events, setEvents] = useState<CameraEvent[]>([]);
   const [recordings, setRecordings] = useState<Record<string, RecordingFile[]>>({});
-  const [layout, setLayout] = useState<1 | 4 | 9>(4);
+  const [layout, setLayout] = useState<1 | 4 | 9 | 16>(4);
   const [maximizedId, setMaximizedId] = useState<string | null>(null);
   const [patrolMode, setPatrolMode] = useState(false);
   const [patrolOffset, setPatrolOffset] = useState<number>(0);
@@ -452,16 +452,34 @@ const LiveView: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
       if (e.key === 'Escape' && maximizedId) {
         setMaximizedId(null);
+      } else if (e.key === '1') {
+        setMaximizedId(null);
+        setLayout(1);
+      } else if (e.key === '4') {
+        setMaximizedId(null);
+        setLayout(4);
+      } else if (e.key === '9') {
+        setMaximizedId(null);
+        setLayout(9);
+      } else if (e.key === '6' || (e.key === '0' && cameras.length > 9)) {
+        setMaximizedId(null);
+        setLayout(16);
+      } else if (e.key.toLowerCase() === 'p') {
+        setPatrolMode(prev => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [maximizedId]);
+  }, [maximizedId, cameras.length]);
 
   const onlineCams = cameras.filter(c => c.status !== 'offline').length;
-  const gridClass = maximizedId || layout === 1 ? 'g1' : layout === 4 ? 'g4' : 'g9';
+  const gridClass = maximizedId || layout === 1 ? 'g1' : layout === 4 ? 'g4' : layout === 9 ? 'g9' : 'g16';
   const syncSpan = 6 * 3600 * 1000;
 
   const chartData = useMemo(() => {
@@ -511,6 +529,22 @@ const LiveView: React.FC = () => {
       {n === 1 && <rect x="0.5" y="0.5" width="12" height="12" rx="1.5" />}
       {n === 4 && (<><rect x="0.5" y="0.5" width="5.5" height="5.5" rx="1"/><rect x="7" y="0.5" width="5.5" height="5.5" rx="1"/><rect x="0.5" y="7" width="5.5" height="5.5" rx="1"/><rect x="7" y="7" width="5.5" height="5.5" rx="1"/></>)}
       {n === 9 && (<><rect x="0.5" y="0.5" width="3.3" height="3.3" rx="0.5"/><rect x="4.85" y="0.5" width="3.3" height="3.3" rx="0.5"/><rect x="9.2" y="0.5" width="3.3" height="3.3" rx="0.5"/><rect x="0.5" y="4.85" width="3.3" height="3.3" rx="0.5"/><rect x="4.85" y="4.85" width="3.3" height="3.3" rx="0.5"/><rect x="9.2" y="4.85" width="3.3" height="3.3" rx="0.5"/><rect x="0.5" y="9.2" width="3.3" height="3.3" rx="0.5"/><rect x="4.85" y="9.2" width="3.3" height="3.3" rx="0.5"/><rect x="9.2" y="9.2" width="3.3" height="3.3" rx="0.5"/></>)}
+      {n === 16 && (
+        <>
+          {[0, 1, 2, 3].map(row =>
+            [0, 1, 2, 3].map(col => (
+              <rect
+                key={`${row}-${col}`}
+                x={0.5 + col * 3.1}
+                y={0.5 + row * 3.1}
+                width="2.3"
+                height="2.3"
+                rx="0.3"
+              />
+            ))
+          )}
+        </>
+      )}
     </svg>
   );
 
@@ -556,7 +590,7 @@ const LiveView: React.FC = () => {
             >
               <Activity size={12} /> Patrol
             </button>
-            {([1, 4, 9] as const).map(n => (
+            {([1, 4, 9, 16] as const).map(n => (
               <button key={n} className={`layout-btn${layout === n && !maximizedId ? ' active' : ''}`} onClick={() => { setMaximizedId(null); setLayout(n); }}>
                 <GridIcon n={n} />
               </button>

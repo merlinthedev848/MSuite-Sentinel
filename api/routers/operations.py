@@ -388,6 +388,37 @@ async def update_alert_rule(rule_id: str, payload: RulePayload, db: AsyncSession
     return {**payload.model_dump(), "id": rule.id}
 
 
+@router.post("/alert-rules/{rule_id}/test")
+async def test_alert_rule(rule_id: str, db: AsyncSession = Depends(get_db)):
+    rule = await db.get(AlertRule, rule_id)
+    if not rule:
+        raise HTTPException(404, "Alert rule not found")
+    cfg = dict(rule.config or {})
+    target_cams = cfg.get("camera_ids", [])
+    cam_id = target_cams[0] if target_cams else "all"
+
+    from datetime import datetime, timezone
+    from api.models.ai import SemanticEvent
+
+    test_obj = cfg.get("objects", ["person"])[0] if cfg.get("objects") else "person"
+    sim_event = SemanticEvent(
+        camera_id=cam_id if cam_id != "all" else "system",
+        object_class=f"test_{test_obj}",
+        confidence=0.99,
+        description=f"Rule Simulation Dispatch: {rule.name}",
+        timestamp=datetime.now(timezone.utc),
+    )
+    db.add(sim_event)
+    await db.commit()
+    return {
+        "status": "tested",
+        "rule_id": rule.id,
+        "rule_name": rule.name,
+        "actions_triggered": cfg.get("actions", ["notify"]),
+        "message": f"Alert rule '{rule.name}' test dispatch executed successfully.",
+    }
+
+
 @router.delete("/alert-rules/{rule_id}")
 async def delete_alert_rule(rule_id: str, db: AsyncSession = Depends(get_db)):
     await db.execute(delete(AlertRule).where(AlertRule.id == rule_id))

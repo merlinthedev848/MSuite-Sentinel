@@ -164,8 +164,41 @@ const Playback: React.FC = () => {
       }
     });
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
       if (e.key === 'Escape' && isTheaterFullscreen) {
         setIsTheaterFullscreen(false);
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        handlePlayPause();
+      } else if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        if (e.shiftKey) handleRewind30();
+        else {
+          const video = videoRef.current;
+          if (video) video.currentTime = Math.max(0, video.currentTime - 5);
+        }
+      } else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        if (e.shiftKey) handleForward30();
+        else {
+          const video = videoRef.current;
+          if (video) video.currentTime = Math.min(video.duration || 999999, video.currentTime + 5);
+        }
+      } else if (e.key === ']') {
+        e.preventDefault();
+        setSpeedIndex(i => Math.min(speeds.length - 1, i + 1));
+      } else if (e.key === '[') {
+        e.preventDefault();
+        setSpeedIndex(i => Math.max(0, i - 1));
+      } else if (e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        handleToggleFullscreen();
+      } else if (e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        if (videoRef.current) videoRef.current.muted = !videoRef.current.muted;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -432,10 +465,18 @@ const Playback: React.FC = () => {
       timeBaseRef.current = 0;
       pendingSeek.current = offset;
     }
-    setCurrentTimeMs(file.startTimestamp + offset * 1000);
+    const targetSeekMs = file.startTimestamp + offset * 1000;
+    setCurrentTimeMs(targetSeekMs);
     setVideoError('');
     setBuffering(true);
     setIsPlaying(true);
+
+    // Keep playhead within visible range if outside
+    if (targetSeekMs < timelineStart || targetSeekMs > timelineEnd) {
+      const span = timelineEnd - timelineStart;
+      setTimelineStart(targetSeekMs - span * 0.5);
+      setTimelineEnd(targetSeekMs + span * 0.5);
+    }
     if (sameFile && video) {
       const duration = video.duration;
       if (Number.isFinite(duration) && duration > 1 && offset <= duration + 0.25) {
@@ -485,19 +526,23 @@ const Playback: React.FC = () => {
       const want = pendingSeek.current;
       const mediaTime = videoRef.current.currentTime;
       const duration = videoRef.current.duration;
-      const arrived = Number.isFinite(duration) && duration > 1
-        ? Math.abs(mediaTime - Math.min(want, Math.max(0, duration - 0.25))) < 0.35
-        : mediaTime > 0.2;
-      if (!arrived) return;
-      pendingSeek.current = null;
+      if (Number.isFinite(duration) && duration > 1) {
+        const target = Math.min(want, Math.max(0, duration - 0.25));
+        if (Math.abs(mediaTime - target) > 0.5) {
+          return; // Still seeking
+        }
+        pendingSeek.current = null;
+      } else {
+        return; // Wait for finite duration metadata before assuming arrived
+      }
     }
     const updatedTimeMs = timelineMs(activeFile.startTimestamp, timeBaseRef.current, videoRef.current.currentTime);
     setCurrentTimeMs(updatedTimeMs);
 
-    if (!isDragging && updatedTimeMs > timelineEnd - 15 * 1000 && updatedTimeMs <= timelineEnd + 60 * 1000) {
+    if (!isDragging && updatedTimeMs > timelineEnd - 10 * 1000) {
       const span = timelineEnd - timelineStart;
-      setTimelineStart(updatedTimeMs - span * 0.5);
-      setTimelineEnd(updatedTimeMs + span * 0.5);
+      setTimelineStart(updatedTimeMs - span * 0.3);
+      setTimelineEnd(updatedTimeMs + span * 0.7);
     }
   };
 
@@ -698,11 +743,22 @@ const Playback: React.FC = () => {
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (!timelineRef.current) return;
-    const zoomFactor = e.deltaY > 0 ? 1.15 : 0.85;
     const rect = timelineRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseRatio = mouseX / rect.width;
     const currentSpan = timelineEnd - timelineStart;
+
+    // Horizontal trackpad swipe or Shift + wheel: pan time horizontally
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey) {
+      const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+      const shiftMs = (delta / (rect.width || 1000)) * currentSpan;
+      setTimelineStart(prev => prev + shiftMs);
+      setTimelineEnd(prev => prev + shiftMs);
+      return;
+    }
+
+    // Vertical wheel or Ctrl/Cmd pinch: zoom centered at mouse position
+    const zoomFactor = e.deltaY > 0 ? 1.15 : 0.85;
+    const mouseX = e.clientX - rect.left;
+    const mouseRatio = Math.max(0, Math.min(1, mouseX / (rect.width || 1)));
     const newSpan = currentSpan * zoomFactor;
     const targetTime = timelineStart + mouseRatio * currentSpan;
     const newStart = targetTime - mouseRatio * newSpan;

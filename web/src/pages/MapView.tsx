@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Upload, Map as MapIcon, Crosshair, Save, AlertTriangle, Loader } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Upload, Map as MapIcon, Crosshair, Save, AlertTriangle, Loader, Video, Play, RotateCw, X } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
 
 interface MapCamera {
@@ -30,6 +31,9 @@ const MapView = () => {
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [selectedCamId, setSelectedCamId] = useState<string | null>(null);
+  const hasDraggedPinRef = useRef(false);
+  const navigate = useNavigate();
 
   const loadMap = async (id = 'default') => {
     setLoading(true);
@@ -95,6 +99,7 @@ const MapView = () => {
   };
 
   const updateCameraPosition = (cameraId: string, clientX: number, clientY: number) => {
+    hasDraggedPinRef.current = true;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = clamp(((clientX - rect.left) / rect.width) * 100);
@@ -189,53 +194,152 @@ const MapView = () => {
             <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(var(--surface-border) 1px, transparent 1px), linear-gradient(90deg, var(--surface-border) 1px, transparent 1px)', backgroundSize: '50px 50px', opacity: 0.18 }} />
           )}
 
-          {cameras.map(cam => (
-            <div
-              key={cam.id}
-              onPointerDown={(event) => {
-                event.currentTarget.setPointerCapture(event.pointerId);
-                setDraggingId(cam.id);
-                updateCameraPosition(cam.id, event.clientX, event.clientY);
-              }}
-              style={{
-                position: 'absolute',
-                left: `${cam.x}%`,
-                top: `${cam.y}%`,
-                transform: 'translate(-50%, -50%)',
-                zIndex: 10,
-                cursor: draggingId === cam.id ? 'grabbing' : 'grab',
-              }}
-            >
-              <div style={{
-                position: 'absolute',
-                top: '50%',
-                left: '50%',
-                width: 150,
-                height: 150,
-                background: cam.alert ? 'rgba(197, 139, 132, 0.16)' : 'rgba(168, 180, 194, 0.10)',
-                transform: `translate(-50%, -50%) rotate(${cam.rotation}deg)`,
-                clipPath: 'polygon(50% 50%, 0 0, 100% 0)',
-                transformOrigin: 'center',
-                pointerEvents: 'none',
-              }} />
-              <div style={{
-                width: 32,
-                height: 32,
-                background: cam.alert ? 'var(--red)' : cam.status === 'offline' ? 'var(--t3)' : '#d7dce2',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                position: 'relative',
-                zIndex: 2,
-              }}>
-                {cam.alert ? <AlertTriangle size={17} color="#17191d" /> : <Crosshair size={17} color="#17191d" />}
+          {cameras.map(cam => {
+            const isSelected = selectedCamId === cam.id;
+            return (
+              <div
+                key={cam.id}
+                onPointerDown={(event) => {
+                  hasDraggedPinRef.current = false;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  setDraggingId(cam.id);
+                }}
+                onPointerUp={() => {
+                  if (!hasDraggedPinRef.current) {
+                    setSelectedCamId(prev => prev === cam.id ? null : cam.id);
+                  }
+                  hasDraggedPinRef.current = false;
+                }}
+                style={{
+                  position: 'absolute',
+                  left: `${cam.x}%`,
+                  top: `${cam.y}%`,
+                  transform: 'translate(-50%, -50%)',
+                  zIndex: isSelected ? 30 : 10,
+                  cursor: draggingId === cam.id ? 'grabbing' : 'pointer',
+                }}
+              >
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  width: 160,
+                  height: 160,
+                  background: cam.alert ? 'rgba(255, 71, 87, 0.22)' : isSelected ? 'rgba(0, 210, 255, 0.20)' : 'rgba(168, 180, 194, 0.12)',
+                  transform: `translate(-50%, -50%) rotate(${cam.rotation}deg)`,
+                  clipPath: 'polygon(50% 50%, 0 0, 100% 0)',
+                  transformOrigin: 'center',
+                  pointerEvents: 'none',
+                  transition: 'background 0.2s',
+                }} />
+                <div style={{
+                  width: 34,
+                  height: 34,
+                  background: cam.alert ? 'var(--red)' : isSelected ? 'var(--cyan)' : cam.status === 'offline' ? 'var(--t3)' : '#d7dce2',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  position: 'relative',
+                  zIndex: 2,
+                  boxShadow: isSelected ? '0 0 16px var(--cyan)' : '0 2px 8px rgba(0,0,0,0.5)',
+                  transition: 'all 0.2s ease',
+                }}>
+                  {cam.alert ? <AlertTriangle size={18} color="#17191d" /> : <Crosshair size={18} color="#17191d" />}
+                </div>
+                <div style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: 'rgba(18,20,24,0.92)',
+                  border: isSelected ? '1px solid var(--cyan)' : '1px solid rgba(255,255,255,0.1)',
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  fontSize: '0.72rem',
+                  marginTop: 4,
+                  whiteSpace: 'nowrap',
+                  color: isSelected ? 'var(--cyan)' : '#fff',
+                  fontWeight: 600,
+                  pointerEvents: 'none',
+                }}>
+                  {cam.name}
+                </div>
+
+                {isSelected && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    style={{
+                      position: 'absolute',
+                      bottom: '120%',
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      width: 240,
+                      background: 'rgba(22, 24, 28, 0.95)',
+                      border: '1px solid var(--cyan-border)',
+                      boxShadow: '0 8px 32px rgba(0,0,0,0.7), 0 0 12px rgba(0, 210, 255, 0.15)',
+                      borderRadius: 10,
+                      padding: 10,
+                      zIndex: 40,
+                      backdropFilter: 'blur(10px)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                      animation: 'fadeIn 0.2s ease',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--t1)' }}>{cam.name}</span>
+                      <button
+                        className="btn-ghost"
+                        style={{ border: 'none', background: 'transparent', color: 'var(--t3)', cursor: 'pointer', padding: 2 }}
+                        onClick={(e) => { e.stopPropagation(); setSelectedCamId(null); }}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+
+                    <div style={{ width: '100%', height: 110, background: '#0b0c0e', borderRadius: 6, overflow: 'hidden', position: 'relative' }}>
+                      <img
+                        src={apiUrl(`/cameras/${cam.id}/snapshot?t=${Date.now()}`)}
+                        alt={cam.name}
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                      <div style={{ position: 'absolute', bottom: 4, left: 6, fontSize: '0.65rem', background: 'rgba(0,0,0,0.7)', padding: '1px 5px', borderRadius: 3, color: cam.status === 'offline' ? 'var(--red)' : 'var(--green)' }}>
+                        {cam.status.toUpperCase()}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginTop: 2 }}>
+                      <button
+                        className="btn btn-primary"
+                        style={{ padding: '4px 6px', fontSize: '0.7rem', display: 'flex', gap: 3, justifyContent: 'center' }}
+                        onClick={() => navigate(`/?camera=${cam.id}`)}
+                      >
+                        <Video size={12} /> Live
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ padding: '4px 6px', fontSize: '0.7rem', display: 'flex', gap: 3, justifyContent: 'center' }}
+                        onClick={() => navigate(`/playback?camera=${cam.id}`)}
+                      >
+                        <Play size={12} /> Play
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ padding: '4px 6px', fontSize: '0.7rem', display: 'flex', gap: 3, justifyContent: 'center' }}
+                        onClick={() => rotateCamera(cam.id)}
+                      >
+                        <RotateCw size={12} /> Rotate
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.82)', padding: '2px 6px', borderRadius: 4, fontSize: '0.72rem', marginTop: 4, whiteSpace: 'nowrap', color: '#fff' }}>
-                {cam.name}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

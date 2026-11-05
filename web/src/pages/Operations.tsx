@@ -161,6 +161,16 @@ const Operations: React.FC = () => {
     }
   };
 
+  const testRule = async (ruleId: string) => {
+    try {
+      const data = await requestJson(`/ops-api/alert-rules/${ruleId}/test`, { method: 'POST' });
+      notify(data.message || 'Rule test executed.');
+      loadAll();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Test dispatch failed.');
+    }
+  };
+
   const addPrivacyMode = async () => {
     try {
       await requestJson('/ops-api/privacy-modes', { method: 'POST', body: JSON.stringify(privacyForm) });
@@ -371,6 +381,9 @@ const Operations: React.FC = () => {
                     <BellRing size={15} color="var(--pink)" />
                     <div style={{ flex: 1 }}><div style={{ fontWeight: 700 }}>{rule.name}</div><div style={{ color: 'var(--t3)', fontSize: '0.72rem' }}>{rule.objects?.join(', ') || 'objects'} during {rule.schedule}</div></div>
                     <span className={`badge ${rule.enabled ? 'online' : 'offline'}`}>{rule.severity}</span>
+                    <button className="btn btn-ghost" title="Simulate rule alert dispatch" onClick={() => testRule(rule.id)} style={{ padding: '4px 8px', fontSize: '0.72rem', display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <BellRing size={13} color="var(--pink)" /> Test
+                    </button>
                     <button className="btn btn-danger" onClick={() => deleteItem(`/ops-api/alert-rules/${rule.id}`, 'Rule deleted.')}><Trash2 size={14} /></button>
                   </div>
                 ))}
