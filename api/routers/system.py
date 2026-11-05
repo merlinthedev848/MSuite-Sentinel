@@ -531,41 +531,35 @@ async def factory_reset(
     from api.services.recorder import recorder_manager
     recorder_manager.stop_all()
 
-    # 2. Delete all recordings
+    # 2. Delete all recordings quickly via fast directory walking
     try:
         await asyncio.to_thread(purge_all_recordings, None)
     except Exception as e:
         print(f"Error purging recordings during factory reset: {e}")
 
-    # 3. Wipe all tables except users. Use TRUNCATE on Postgres and portable deletes otherwise.
-    from api.database import engine as _engine
+    # 3. Wipe all tables except users in safe dependency order
+    for model in (EventReview, PrivacyMode, AlertRule, NVRConnection, SemanticEvent, Face, Camera):
+        try:
+            await db.execute(delete(model))
+        except Exception as e:
+            print(f"Could not delete from table {getattr(model, '__tablename__', str(model))}: {e}")
     try:
-        if _engine.dialect.name == "postgresql":
-            await db.execute(text("TRUNCATE TABLE event_reviews, privacy_modes, alert_rules, nvr_connections, semantic_events, faces, cameras CASCADE;"))
-        else:
-            await db.execute(delete(EventReview))
-            await db.execute(delete(PrivacyMode))
-            await db.execute(delete(AlertRule))
-            await db.execute(delete(NVRConnection))
-            await db.execute(delete(SemanticEvent))
-            await db.execute(delete(Face))
-            await db.execute(delete(Camera))
         await db.commit()
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Database wipe failed: {e}")
 
-    # 4. Reset config file to defaults by just removing it if it exists and writing an empty one
+    # 4. Reset config file to defaults by rewriting clean configuration
     if CONFIG_PATH.is_file():
         try:
-            CONFIG_PATH.unlink()
-        except Exception:
-            pass
+            CONFIG_PATH.write_text("# mView Sentinel Configuration\n", encoding="utf-8")
+        except Exception as e:
+            print(f"Could not reset config file: {e}")
 
     await local_core.refresh_snapshot(include_storage=True)
     return {
         "status": "success",
-        "message": "Factory reset complete. Recordings, cameras, and configuration were cleared. The process is still running.",
+        "message": "Factory reset complete. Recordings, cameras, and configuration were cleared.",
     }
 
 

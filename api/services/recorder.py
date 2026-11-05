@@ -953,8 +953,8 @@ def _recording_roots() -> list[Path]:
 
 
 def purge_all_recordings(camera_id: str | None = None) -> dict:
-    """Delete recording segment files from the configured recording store."""
-    from api.security import contained_path, safe_camera_id
+    """Delete recording segment files quickly and cleanly from the configured recording store."""
+    from api.security import safe_camera_id
     purged_count = 0
     purged_bytes = 0
 
@@ -965,32 +965,46 @@ def purge_all_recordings(camera_id: str | None = None) -> dict:
         return {"deleted_files": 0, "deleted_gb": 0.0, "error": "invalid camera id"}
 
     possible_bases = _recording_roots()
+    target_extensions = {".mp4", ".mkv", ".ts", ".jpg", ".jpeg", ".png", ".tmp"}
 
-    seen_files = set()
     for base in possible_bases:
         if not base.exists():
             continue
 
-        patterns = ["*.mp4", "*.mkv", "*.ts", "*.jpg", "*.jpeg", "*.png", "*.tmp"]
-        for pattern in patterns:
-            if cid:
-                cam_dir = base / cid
-                files = list(cam_dir.rglob(pattern)) if cam_dir.exists() else []
-            else:
-                files = list(base.rglob(pattern))
+        target_dir = (base / cid) if cid else base
+        if not target_dir.exists():
+            continue
 
-            for f in files:
-                if contained_path(base, f) is None:
-                    continue
-                if f.is_file() and f not in seen_files:
-                    seen_files.add(f)
+        try:
+            for root, dirs, files in os.walk(str(target_dir), topdown=False):
+                for f in files:
+                    ext = os.path.splitext(f)[1].lower()
+                    if ext in target_extensions:
+                        fp = os.path.join(root, f)
+                        try:
+                            file_size = os.path.getsize(fp)
+                            os.unlink(fp)
+                            purged_count += 1
+                            purged_bytes += file_size
+                        except OSError as e:
+                            logger.error(f"Error purging recording {fp}: {e}")
+                # Remove empty subdirectories
+                for d in dirs:
+                    dp = os.path.join(root, d)
                     try:
-                        file_size = f.stat().st_size
-                        f.unlink()
-                        purged_count += 1
-                        purged_bytes += file_size
-                    except Exception as e:
-                        logger.error(f"Error purging recording {f}: {e}")
+                        os.rmdir(dp)
+                    except OSError:
+                        pass
+            if cid:
+                try:
+                    os.rmdir(str(target_dir))
+                except OSError:
+                    pass
+        except Exception as e:
+            logger.error(f"Error walking recording directory {target_dir}: {e}")
+
+    # Clear internal in-memory caches
+    _clear_playback_lru()
 
     target = cid or "all cameras"
     logger.warning(f"Manual recording purge for {target} deleted {purged_count} files ({round(purged_bytes / 1_073_741_824, 2)} GB)")

@@ -399,20 +399,28 @@ const Settings: React.FC = () => {
     }
     setFactoryResetting(true);
     try {
-      const res = await fetch(apiUrl('/system/factory-reset'), { method: 'POST' });
+      const res = await fetch(apiUrl('/system/factory-reset'), {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+        },
+      });
       if (res.ok) {
         showToast('Factory reset complete. Logging out...');
-        await fetch(apiUrl('/auth/logout'), { method: 'POST' });
+        try {
+          await fetch(apiUrl('/auth/logout'), { method: 'POST' });
+        } catch {}
         setTimeout(() => {
           window.location.href = '/';
-        }, 3000);
+        }, 2000);
       } else {
-        const err = await res.json();
-        showToast(`Factory reset failed: ${err.detail || 'Unknown error'}`);
+        const err = await res.json().catch(() => ({}));
+        showToast(`Factory reset failed: ${err.detail || err.message || `HTTP ${res.status}`}`);
         setFactoryResetting(false);
       }
-    } catch {
-      showToast('Network error during factory reset.');
+    } catch (err: any) {
+      console.error('Factory reset error:', err);
+      showToast(`Network error during factory reset: ${err?.message || 'Server did not respond'}`);
       setFactoryResetting(false);
     }
   };
