@@ -1028,6 +1028,7 @@ const LiveView: React.FC = () => {
           <button
             className="layout-btn"
             title="Open Wallboard NOC in new tab"
+            aria-label="Open Wallboard NOC in new tab"
             onClick={() => window.open('/wallboard', '_blank')}
             style={{ width: 28, height: 28 }}
           >
@@ -1040,6 +1041,7 @@ const LiveView: React.FC = () => {
                   key={n}
                   className={`layout-btn${layout === n && !maximizedId ? ' active' : ''}`}
                   title={`${n}-Camera Layout`}
+                  aria-label={`${n} Camera Grid Layout`}
                   onClick={() => { setMaximizedId(null); setLayout(n); }}
                 >
                   <GridIcon n={n} />
@@ -1049,6 +1051,7 @@ const LiveView: React.FC = () => {
               <button
                 className="layout-btn"
                 title="Fullscreen Monitor Grid"
+                aria-label="Toggle Fullscreen Grid View"
                 onClick={() => {
                   const el = document.querySelector('.cam-grid') as HTMLElement;
                   if (el) requestNativeFullscreen(el);

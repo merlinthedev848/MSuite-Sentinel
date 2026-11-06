@@ -171,6 +171,7 @@ const Wallboard: React.FC = () => {
         <button
           onClick={toggleFullscreen}
           title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+          aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
           style={{
             background: 'transparent',
             border: 'none',
@@ -186,6 +187,7 @@ const Wallboard: React.FC = () => {
         <button
           onClick={() => navigate('/dashboard')}
           title="Exit to Dashboard"
+          aria-label="Exit to Dashboard"
           style={{
             background: '#e4e8ed',
             color: '#17191d',

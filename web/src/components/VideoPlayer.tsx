@@ -250,8 +250,8 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
         </div>
       )}
 
-      {/* Bottom Controls Overlay (Visible on Hover) */}
-      <div style={{
+      {/* Bottom Controls Overlay (Visible on Hover & Focus) */}
+      <div className="video-controls-overlay" style={{
         position: 'absolute',
         bottom: 0, left: 0, right: 0,
         height: '50px',
@@ -268,8 +268,9 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
         {/* Audio Output Mute/Unmute */}
         <button 
           onClick={() => setIsMuted(!isMuted)} 
-          style={{ background: 'transparent', border: 'none', color: isMuted ? '#aaa' : 'var(--color-primary)', cursor: 'pointer', padding: '4px' }} 
+          style={{ background: 'transparent', border: 'none', color: isMuted ? 'var(--t3)' : 'var(--cyan)', cursor: 'pointer', padding: '4px' }} 
           title={isMuted ? "Unmute Audio" : "Mute Audio"}
+          aria-label={isMuted ? "Unmute Audio" : "Mute Audio"}
         >
           {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
         </button>
@@ -277,8 +278,9 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
         {/* Focus Mode (Digital Zoom) */}
         <button 
           onClick={toggleZoomMode} 
-          style={{ background: 'transparent', border: 'none', color: isZoomMode ? 'var(--color-primary)' : '#fff', cursor: 'pointer', padding: '4px' }} 
+          style={{ background: 'transparent', border: 'none', color: isZoomMode ? 'var(--cyan)' : '#fff', cursor: 'pointer', padding: '4px' }} 
           title="Digital Zoom & Pan"
+          aria-label={isZoomMode ? "Disable Digital Zoom" : "Enable Digital Zoom & Pan"}
         >
           <Focus size={18} />
         </button>
@@ -288,6 +290,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
           onClick={handleSnapshot} 
           style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', padding: '4px' }} 
           title="Take Snapshot"
+          aria-label="Capture snapshot image"
         >
           <Camera size={18} />
         </button>
@@ -297,6 +300,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ cameraId, name, status, hasMo
           onClick={handleFullscreen} 
           style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', padding: '4px' }} 
           title="Fullscreen Mode"
+          aria-label={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
         >
           {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
         </button>

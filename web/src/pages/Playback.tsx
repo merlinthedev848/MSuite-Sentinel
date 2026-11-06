@@ -1267,24 +1267,25 @@ const Playback: React.FC = () => {
 
             {/* Transport Controls Bar */}
             <div className="transport-pill">
-              <button className="transport-btn" onClick={handleRewind30} title="-30s">
+              <button className="transport-btn" onClick={handleRewind30} title="-30s" aria-label="Rewind 30 seconds">
                 <RotateCcw size={16} />
                 <span style={{ fontSize: '0.62rem', marginLeft: 4, fontWeight: 'bold' }}>30s</span>
               </button>
-              <button className="transport-btn" onClick={handlePrevSegment} title="Prev Segment">
+              <button className="transport-btn" onClick={handlePrevSegment} title="Prev Segment" aria-label="Previous recording segment">
                 <SkipBack size={16} />
               </button>
               <button 
                 className="transport-btn play-pause" 
                 onClick={handlePlayPause}
                 title={isPlaying ? "Pause" : "Play"}
+                aria-label={isPlaying ? "Pause playback" : "Start playback"}
               >
                 {isPlaying ? <Pause size={20} /> : <Play size={20} />}
               </button>
-              <button className="transport-btn" onClick={handleNextSegment} title="Next Segment">
+              <button className="transport-btn" onClick={handleNextSegment} title="Next Segment" aria-label="Next recording segment">
                 <SkipForward size={16} />
               </button>
-              <button className="transport-btn" onClick={handleForward30} title="+30s">
+              <button className="transport-btn" onClick={handleForward30} title="+30s" aria-label="Forward 30 seconds">
                 <span style={{ fontSize: '0.62rem', marginRight: 4, fontWeight: 'bold' }}>30s</span>
                 <RotateCw size={16} />
               </button>

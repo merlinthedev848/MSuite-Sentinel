@@ -295,6 +295,7 @@ const MapView = () => {
                         className="btn-ghost"
                         style={{ border: 'none', background: 'transparent', color: 'var(--t3)', cursor: 'pointer', padding: 2 }}
                         onClick={(e) => { e.stopPropagation(); setSelectedCamId(null); }}
+                        aria-label="Close camera details"
                       >
                         <X size={14} />
                       </button>
