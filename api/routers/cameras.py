@@ -30,9 +30,11 @@ def _require_settings(request: Request) -> None:
     raise HTTPException(403, "Settings permission required")
 
 
-def _present_camera(cam: Camera, user: dict | None) -> dict:
+def _present_camera(cam: Camera, user: dict | None, rec_status: dict | None = None) -> dict:
     from api.services.recorder import recorder_manager
-    rec_state = recorder_manager.status().get(cam.id)
+    if rec_status is None:
+        rec_status = recorder_manager.status()
+    rec_state = rec_status.get(cam.id)
     payload = CameraResponse.model_validate(cam).model_dump(mode="json")
     if not cam.enabled:
         payload["status"] = "disabled"

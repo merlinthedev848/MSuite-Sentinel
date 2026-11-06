@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSONResponse
 from starlette.background import BackgroundTask
@@ -227,6 +228,7 @@ app = FastAPI(
 )
 
 _cors_origins = [origin for origin in settings.cors_origins if origin and origin != "*"]
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -752,10 +754,17 @@ async def serve_recording(camera_id: str, filename: str, request: Request):
 DIST = Path(__file__).parent.parent / "web" / "dist"
 INDEX = DIST / "index.html"
 
-# Mount /assets only if the built assets folder exists
+# Mount /assets with high-performance immutable browser caching
+class CachedStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
 _assets = DIST / "assets"
 if _assets.exists():
-    app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
+    app.mount("/assets", CachedStaticFiles(directory=str(_assets)), name="assets")
 
 app.mount("/static/maps", StaticFiles(directory=maps.UPLOAD_DIR), name="maps")
 
