@@ -31,7 +31,16 @@ def _require_settings(request: Request) -> None:
 
 
 def _present_camera(cam: Camera, user: dict | None) -> dict:
+    from api.services.recorder import recorder_manager
+    rec_state = recorder_manager.status().get(cam.id)
     payload = CameraResponse.model_validate(cam).model_dump(mode="json")
+    if not cam.enabled:
+        payload["status"] = "disabled"
+    elif rec_state == "recording":
+        payload["status"] = "online"
+    elif rec_state in ("backoff", "error"):
+        payload["status"] = "offline"
+
     if can_view_secrets(user):
         return payload
     payload["onvif_password"] = mask_secret(payload.get("onvif_password"))

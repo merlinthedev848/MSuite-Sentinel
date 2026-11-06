@@ -213,6 +213,7 @@ const CameraFeedComponent = React.memo<{
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [liveMode, setLiveMode] = useState<LiveMode>('connecting');
+  const [retryKey, setRetryKey] = useState(0);
   const [showPTZ, setShowPTZ] = useState(false);
   const hasStream = Boolean(cam.rtsp_url_main || cam.rtsp_url_sub);
   const quality: 'main' | 'sub' = cam.rtsp_url_sub && !maximized ? 'sub' : 'main';
@@ -353,6 +354,7 @@ const CameraFeedComponent = React.memo<{
       {hasStream ? (
         <>
           <LivePlayer
+            key={`${cam.id}-${retryKey}`}
             cameraId={cam.id}
             quality={quality}
             muted={isMuted}
@@ -365,6 +367,19 @@ const CameraFeedComponent = React.memo<{
             <div className="cam-connecting" style={{ zIndex: 2 }}>
               <div className="spinner" />
               <span style={{ fontSize: '0.72rem', color: 'var(--t3)' }}>Connecting...</span>
+            </div>
+          )}
+          {liveMode === 'unavailable' && (
+            <div className="cam-placeholder" style={{ zIndex: 2 }}>
+              <WifiOff size={26} strokeWidth={1.5} />
+              <span style={{ fontSize: '0.78rem' }}>Camera Stream Unavailable</span>
+              <button
+                className="btn btn-xs btn-ghost"
+                style={{ marginTop: 6, fontSize: '0.72rem', padding: '3px 8px' }}
+                onClick={(e) => { e.stopPropagation(); setRetryKey(k => k + 1); }}
+              >
+                Retry
+              </button>
             </div>
           )}
         </>

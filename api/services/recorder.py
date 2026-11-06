@@ -84,7 +84,7 @@ class CameraRecorder:
                 logger.warning(f"[{self.camera_name}] Recorder error: {e}. Retrying in {backoff}s...")
             if not self._stop:
                 await asyncio.sleep(backoff + random.uniform(0, backoff * 0.25))
-                backoff = min(backoff * 2, 120)
+                backoff = min(backoff * 1.5, 30)
 
     async def _record_once(self):
         output_dir = RECORDINGS_BASE / self.camera_id
@@ -880,8 +880,22 @@ def locate_recording(camera_id: str, filename: str) -> Path | None:
 
 
 
+_STORAGE_REPORT_CACHE: dict[str, Any] | None = None
+_STORAGE_REPORT_CACHE_TIME: float = 0.0
+
+
+def invalidate_storage_cache() -> None:
+    global _STORAGE_REPORT_CACHE
+    _STORAGE_REPORT_CACHE = None
+
+
 def storage_report() -> dict:
-    """Return per-camera recording storage usage and simple retention estimates."""
+    """Return per-camera recording storage usage and simple retention estimates with 60s memory caching."""
+    global _STORAGE_REPORT_CACHE, _STORAGE_REPORT_CACHE_TIME
+    now_ts = time.monotonic()
+    if _STORAGE_REPORT_CACHE is not None and (now_ts - _STORAGE_REPORT_CACHE_TIME) < 60.0:
+        return _STORAGE_REPORT_CACHE
+
     base = RECORDINGS_BASE
     now = datetime.now(timezone.utc)
     report = {
@@ -892,7 +906,53 @@ def storage_report() -> dict:
         "estimated_gb_per_day": 0.0,
     }
     if not base.exists():
+        _STORAGE_REPORT_CACHE = report
+        _STORAGE_REPORT_CACHE_TIME = now_ts
         return report
+
+    total_bytes = 0
+    total_day_bytes = 0
+    try:
+        cam_dirs = sorted([d for d in base.iterdir() if d.is_dir()])
+    except OSError:
+        cam_dirs = []
+    for cam_dir in cam_dirs:
+        files: list[int] = []
+        cam_bytes = 0
+        day_bytes = 0
+        latest: datetime | None = None
+        for item in _iter_camera_mp4s(cam_dir):
+            try:
+                if isinstance(item, tuple):
+                    _, stat = item
+                else:
+                    stat = item.stat()
+            except OSError:
+                continue
+            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+            cam_bytes += stat.st_size
+            if (now - mtime).total_seconds() <= 24 * 3600:
+                day_bytes += stat.st_size
+            latest = max(latest, mtime) if latest else mtime
+            files.append(stat.st_size)
+
+        total_bytes += cam_bytes
+        total_day_bytes += day_bytes
+        report["cameras"].append({
+            "camera_id": cam_dir.name,
+            "files": len(files),
+            "total_gb": round(cam_bytes / 1_073_741_824, 2),
+            "last_24h_gb": round(day_bytes / 1_073_741_824, 2),
+            "avg_segment_mb": round((sum(files) / len(files) / 1_048_576) if files else 0, 2),
+            "estimated_gb_per_day": round(day_bytes / 1_073_741_824, 2),
+            "latest_recording": latest.isoformat() if latest else None,
+        })
+
+    report["total_gb"] = round(total_bytes / 1_073_741_824, 2)
+    report["estimated_gb_per_day"] = round(total_day_bytes / 1_073_741_824, 2)
+    _STORAGE_REPORT_CACHE = report
+    _STORAGE_REPORT_CACHE_TIME = now_ts
+    return report
 
     total_bytes = 0
     total_day_bytes = 0
@@ -953,6 +1013,7 @@ def _recording_roots() -> list[Path]:
 
 
 def purge_all_recordings(camera_id: str | None = None) -> dict:
+    invalidate_storage_cache()
     """Delete recording segment files quickly and cleanly from the configured recording store."""
     from api.security import safe_camera_id
     purged_count = 0
@@ -1015,6 +1076,7 @@ def purge_all_recordings(camera_id: str | None = None) -> dict:
 
 
 def purge_old_recordings(retention_days: int):
+    invalidate_storage_cache()
     """Delete recording segment files older than retention_days."""
     if retention_days <= 0:
         return
@@ -1045,4 +1107,65 @@ def purge_old_recordings(retention_days: int):
     if purged_count > 0:
         _LIST_CACHE.clear()
         logger.info(f"Auto-purge complete. Deleted {purged_count} files ({round(purged_bytes / 1_048_576, 1)} MB)")
+
+def emergency_disk_space_purge(min_free_gb: float = 10.0, max_usage_percent: float = 92.0) -> int:
+    invalidate_storage_cache()
+    """Enforce disk headroom to prevent system crashes and recording corruption when disk approaches 100%."""
+    from api.services.local_core import _safe_disk_usage
+    total, used, free = _safe_disk_usage(str(RECORDINGS_BASE))
+    if total <= 0:
+        return 0
+
+    total_gb = total / (1024**3)
+    free_gb = free / (1024**3)
+    usage_pct = (used / total) * 100
+
+    if free_gb >= min_free_gb and usage_pct < max_usage_percent:
+        return 0
+
+    logger.warning(
+        f"CRITICAL DISK USAGE ({usage_pct:.1f}% used, {free_gb:.2f} GB free). Initiating emergency purge..."
+    )
+
+    recordings: list[tuple[float, int, Path]] = []
+    for root in _recording_roots():
+        if not root.exists():
+            continue
+        try:
+            for entry in os.scandir(root):
+                if entry.is_dir():
+                    try:
+                        for f in os.scandir(entry.path):
+                            if f.name.endswith(".mp4") and f.is_file():
+                                stat = f.stat()
+                                recordings.append((stat.st_mtime, stat.st_size, Path(f.path)))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+    recordings.sort(key=lambda x: x[0])
+
+    purged_count = 0
+    purged_bytes = 0
+    target_freed_bytes = int(max((min_free_gb * (1024**3)) - free, 5 * (1024**3)))
+
+    for mtime, size, file_path in recordings:
+        if purged_bytes >= target_freed_bytes:
+            break
+        try:
+            file_path.unlink(missing_ok=True)
+            purged_bytes += size
+            purged_count += 1
+        except OSError as e:
+            logger.error(f"Emergency purge error deleting {file_path}: {e}")
+
+    if purged_count > 0:
+        _LIST_CACHE.clear()
+        _RECORDING_ENTRY_CACHE.clear()
+        _LOCATE_CACHE.clear()
+        logger.warning(
+            f"Emergency purge freed {purged_bytes / (1024**2):.1f} MB across {purged_count} files."
+        )
+    return purged_count
 

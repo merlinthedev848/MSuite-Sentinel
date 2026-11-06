@@ -200,7 +200,14 @@ async def _persist_detection(data: dict) -> None:
     if not camera_id:
         logger.warning("Skipping MQTT event without camera_id")
         return
-    _LAST_SEEN[str(camera_id)] = time.time()
+    cid_str = str(camera_id)
+    _LAST_SEEN[cid_str] = time.time()
+    if cid_str in _SIGNAL_ALERTED:
+        _SIGNAL_ALERTED.pop(cid_str, None)
+        try:
+            await local_core.publish("signal_restored", {"camera_id": cid_str})
+        except Exception:
+            pass
     if data.get("heartbeat") or not objects:
         return
 

@@ -39,7 +39,7 @@ const sectionHeaderStyle: React.CSSProperties = {
 export const Dashboard = () => {
   const [cameras, setCameras] = useState<DashboardCamera[]>([]);
   const [events, setEvents] = useState<DashboardEvent[]>([]);
-  const [storage, setStorage] = useState<{ free_gb: number; total_gb: number; usage_percent: number } | null>(null);
+  const [storage, setStorage] = useState<{ free_gb: number; total_gb: number; usage_percent: number; used_gb?: number } | null>(null);
   const [recordingStorage, setRecordingStorage] = useState<{ total_gb: number } | null>(null);
   const [systemStatus, setSystemStatus] = useState<string>('online');
   const [stats, setStats] = useState({ total_cameras: 0, online_cameras: 0, events_today: 0 });
@@ -52,11 +52,11 @@ export const Dashboard = () => {
     const fetchData = async () => {
       try {
         const [camRes, eventRes, healthRes, analyticsRes, storageRes] = await Promise.all([
-          fetch(apiUrl('/cameras')),
-          fetch(apiUrl('/events?limit=20&unreviewed_only=true')),
-          fetch(apiUrl('/system/health')),
-          fetch(apiUrl('/events/analytics')),
-          fetch(apiUrl('/system/storage-report')),
+          fetch(apiUrl('/cameras')).catch(() => ({ ok: false } as Response)),
+          fetch(apiUrl('/events?limit=20&unreviewed_only=true')).catch(() => ({ ok: false } as Response)),
+          fetch(apiUrl('/system/health')).catch(() => ({ ok: false } as Response)),
+          fetch(apiUrl('/events/analytics')).catch(() => ({ ok: false } as Response)),
+          fetch(apiUrl('/system/storage-report')).catch(() => ({ ok: false } as Response)),
         ]);
 
         if (!active) return;
@@ -154,7 +154,7 @@ export const Dashboard = () => {
     },
     {
       label: 'NVR Archive Size',
-      value: recordingStorage ? `${recordingStorage.total_gb} GB` : '0 GB',
+      value: recordingStorage ? `${recordingStorage.total_gb} GB` : (storage ? `${(storage.used_gb ?? (storage.total_gb - storage.free_gb)).toFixed(1)} GB` : '0 GB'),
       detail: storage ? `Server Disk: ${storage.usage_percent}% full` : 'loading',
       icon: HardDrive,
       tone: 'var(--t2)',

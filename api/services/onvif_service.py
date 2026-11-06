@@ -23,6 +23,7 @@ async def _probe_onvif(ip: str, port: int, timeout: float = 2.0) -> dict | None:
     url = f"http://{ip}:{port}/onvif/device_service"
     try:
         import httpx
+        import re
         async with httpx.AsyncClient(timeout=timeout) as client:
             # A minimal GetDeviceInformation SOAP request
             soap = (
@@ -38,11 +39,48 @@ async def _probe_onvif(ip: str, port: int, timeout: float = 2.0) -> dict | None:
             )
             # Any 200/400/401 means something is listening on ONVIF
             if resp.status_code in (200, 400, 401, 500):
+                manufacturer = "Unknown"
+                model = "IP Camera"
+                resp_text = resp.text or ""
+
+                # 1. Parse XML if returned
+                if resp.status_code == 200 and resp_text:
+                    m_match = re.search(r"<(?:tds:)?Manufacturer>([^<]+)</(?:tds:)?Manufacturer>", resp_text, re.IGNORECASE)
+                    if m_match:
+                        manufacturer = m_match.group(1).strip()
+                    mod_match = re.search(r"<(?:tds:)?Model>([^<]+)</(?:tds:)?Model>", resp_text, re.IGNORECASE)
+                    if mod_match:
+                        model = mod_match.group(1).strip()
+
+                # 2. Check HTTP headers and auth realms for vendor signatures
+                if manufacturer == "Unknown":
+                    combined_sig = (
+                        resp.headers.get("server", "") + " " +
+                        resp.headers.get("www-authenticate", "") + " " +
+                        resp_text[:500]
+                    ).lower()
+                    if any(k in combined_sig for k in ("hikvision", "hik-", "hik_")):
+                        manufacturer, model = "Hikvision", "Hikvision Camera"
+                    elif any(k in combined_sig for k in ("dahua", "dh-", "dhi-")):
+                        manufacturer, model = "Dahua", "Dahua Camera"
+                    elif "amcrest" in combined_sig:
+                        manufacturer, model = "Amcrest", "Amcrest Camera"
+                    elif "reolink" in combined_sig:
+                        manufacturer, model = "Reolink", "Reolink Camera"
+                    elif "axis" in combined_sig:
+                        manufacturer, model = "Axis", "Axis Camera"
+                    elif "foscam" in combined_sig:
+                        manufacturer, model = "Foscam", "Foscam Camera"
+                    elif any(k in combined_sig for k in ("uniview", "unv")):
+                        manufacturer, model = "Uniview", "UNV Camera"
+                    elif any(k in combined_sig for k in ("hanwha", "wisenet")):
+                        manufacturer, model = "Hanwha", "Wisenet Camera"
+
                 return {
                     "id": f"{ip}:{port}",
                     "ip": ip,
-                    "manufacturer": "Unknown",
-                    "model": "IP Camera",
+                    "manufacturer": manufacturer,
+                    "model": model,
                     "onvif_endpoint": url,
                     "status": "online",
                 }
@@ -79,8 +117,9 @@ async def _scan_subnet(subnet: str, max_concurrent: int = 64) -> list[dict]:
 
 
 def _get_local_subnets() -> list[str]:
-    """Detect the local subnets the machine is on."""
+    """Detect the local subnets the machine is on across all active interfaces."""
     subnets = []
+    import socket
     try:
         import netifaces
         for iface in netifaces.interfaces():
@@ -98,11 +137,28 @@ def _get_local_subnets() -> list[str]:
                             subnets.append(str(network))
                         except Exception:
                             pass
-    except ImportError:
-        # Fallback: common home/office subnets
-        subnets = ["192.168.1.0/24", "192.168.0.0/24", "10.0.0.0/24"]
+    except Exception:
+        pass
 
-    return subnets if subnets else ["192.168.1.0/24"]
+    if not subnets:
+        try:
+            import psutil
+            addrs = psutil.net_if_addrs()
+            for iface, if_addrs in addrs.items():
+                if iface.startswith(('lo', 'docker', 'br-', 'veth', 'virbr', 'tun', 'tap', 'wg')):
+                    continue
+                for addr in if_addrs:
+                    if getattr(addr, "family", None) == socket.AF_INET and addr.address and not addr.address.startswith('127.'):
+                        netmask = getattr(addr, "netmask", None) or '255.255.255.0'
+                        try:
+                            network = ipaddress.IPv4Network(f"{addr.address}/{netmask}", strict=False)
+                            subnets.append(str(network))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    return list(dict.fromkeys(subnets)) if subnets else ["192.168.1.0/24", "192.168.0.0/24", "10.0.0.0/24"]
 
 
 async def discover_cameras(timeout: int = 5) -> list[dict]:

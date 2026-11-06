@@ -31,34 +31,43 @@ ALGORITHM = settings.jwt_algorithm
 
 
 async def retention_worker():
-    """Background task to delete recordings older than settings.retention_days."""
-    log.info("Starting retention worker background loop...")
+    """Background task to delete recordings older than settings.retention_days and enforce emergency disk headroom."""
+    log.info("Starting retention and disk safety background worker...")
+    last_retention_run = 0.0
     while True:
         try:
-            retention_days = settings.retention_days
-            if retention_days and retention_days > 0:
-                from api.services.recorder import purge_old_recordings
-                await asyncio.to_thread(purge_old_recordings, retention_days)
-                
-                # Clean up old database events
-                try:
-                    from api.database import async_session_maker
-                    from sqlalchemy import delete
-                    from api.models.ai import SemanticEvent
+            now = asyncio.get_running_loop().time()
+            from api.services.recorder import emergency_disk_space_purge, purge_old_recordings
+
+            # 1. Proactive disk headroom safety (every cycle)
+            await asyncio.to_thread(emergency_disk_space_purge, 10.0, 92.0)
+
+            # 2. Time-based retention (runs every 6 hours)
+            if now - last_retention_run > 6 * 3600:
+                retention_days = settings.retention_days
+                if retention_days and retention_days > 0:
+                    await asyncio.to_thread(purge_old_recordings, retention_days)
                     
-                    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-                    async with async_session_maker() as session:
-                        await session.execute(delete(SemanticEvent).where(SemanticEvent.timestamp < cutoff))
-                        await session.commit()
-                except Exception as e:
-                    log.error(f"Failed to delete old events: {e}")
+                    # Clean up old database events
+                    try:
+                        from api.database import async_session_maker
+                        from sqlalchemy import delete
+                        from api.models.ai import SemanticEvent
+                        
+                        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+                        async with async_session_maker() as session:
+                            await session.execute(delete(SemanticEvent).where(SemanticEvent.timestamp < cutoff))
+                            await session.commit()
+                    except Exception as e:
+                        log.error(f"Failed to delete old events: {e}")
+                last_retention_run = now
         except asyncio.CancelledError:
             break
         except Exception as e:
             log.error(f"Error in retention worker: {e}")
         
-        # Run every 12 hours (43200 seconds)
-        await asyncio.sleep(12 * 3600)
+        # Check every 2 minutes for disk safety
+        await asyncio.sleep(120)
 
 
 async def auto_update_worker():

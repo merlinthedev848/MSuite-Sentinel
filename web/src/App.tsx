@@ -76,31 +76,51 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
       }
     };
 
-    const load = async () => {
-      try {
-        const started = performance.now();
-        const [c, e, h, s] = await Promise.all([
-          fetch(apiUrl('/cameras')).then(r => r.ok ? r.json() : null).catch(() => null),
-          fetch(apiUrl('/events?limit=20')).then(r => r.ok ? r.json() : null).catch(() => null),
-          fetch(apiUrl('/system/health')).then(r => r.ok ? r.json() : null).catch(() => null),
-          fetch(apiUrl('/system/storage-report')).then(r => r.ok ? r.json() : null).catch(() => null),
-        ]);
-        if (Array.isArray(c) && c.length > 0) setCameras(c);
-        else if (Array.isArray(c)) setCameras(prev => (prev.length > 0 ? prev : c));
-        if (Array.isArray(e)) setEvents(e);
-        if (s) setRecordingStorage(s);
-        if (h) {
-          if (h.storage) setStorage(h.storage);
-          setSystemStats(prev => ({
-            cpu: typeof h.cpu_usage_percent === 'number' ? h.cpu_usage_percent.toFixed(1) : prev.cpu,
-            up: typeof h.network?.up_mbps === 'number' ? h.network.up_mbps.toFixed(2) : prev.up,
-            down: typeof h.network?.down_mbps === 'number' ? h.network.down_mbps.toFixed(2) : prev.down,
-            latency: `${Math.round(performance.now() - started)}`,
-            network: h.status === 'online' ? 'OK' : (h.status ? 'DEGRADED' : prev.network),
-            codec: h.record_codec || prev.codec,
-          }));
-        }
-      } catch {}
+    const load = () => {
+      const started = performance.now();
+
+      // 1. Health & Server Telemetry (fastest: populates CPU, Network, Disk immediately)
+      fetch(apiUrl('/system/health'))
+        .then(r => r.ok ? r.json() : null)
+        .then(h => {
+          if (h) {
+            if (h.storage) setStorage(h.storage);
+            setSystemStats(prev => ({
+              cpu: typeof h.cpu_usage_percent === 'number' ? h.cpu_usage_percent.toFixed(1) : prev.cpu,
+              up: typeof h.network?.up_mbps === 'number' ? h.network.up_mbps.toFixed(2) : prev.up,
+              down: typeof h.network?.down_mbps === 'number' ? h.network.down_mbps.toFixed(2) : prev.down,
+              latency: `${Math.round(performance.now() - started)}`,
+              network: h.status === 'online' ? 'OK' : (h.status ? 'DEGRADED' : prev.network),
+              codec: h.record_codec || prev.codec,
+            }));
+          }
+        })
+        .catch(() => null);
+
+      // 2. Cameras
+      fetch(apiUrl('/cameras'))
+        .then(r => r.ok ? r.json() : null)
+        .then(c => {
+          if (Array.isArray(c) && c.length > 0) setCameras(c);
+          else if (Array.isArray(c)) setCameras(prev => (prev.length > 0 ? prev : c));
+        })
+        .catch(() => null);
+
+      // 3. Events
+      fetch(apiUrl('/events?limit=20'))
+        .then(r => r.ok ? r.json() : null)
+        .then(e => {
+          if (Array.isArray(e)) setEvents(e);
+        })
+        .catch(() => null);
+
+      // 4. Recording Storage
+      fetch(apiUrl('/system/storage-report'))
+        .then(r => r.ok ? r.json() : null)
+        .then(s => {
+          if (s) setRecordingStorage(s);
+        })
+        .catch(() => null);
     };
 
     // Immediately trigger REST hydration on mount
@@ -116,7 +136,7 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
       if (eventsSource) {
         try { eventsSource.close(); } catch {}
       }
-      eventsSource = new EventSource(apiUrl('/system/live'));
+      eventsSource = new EventSource(apiUrl('/system/live'), { withCredentials: true } as EventSourceInit);
       eventsSource.addEventListener('snapshot', (event: MessageEvent) => {
         try {
           const message = JSON.parse(event.data);
@@ -246,10 +266,10 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
             <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: systemStats.network === 'OK' ? 'var(--green)' : 'var(--t2)' }}>{systemStats.network}</span>
           </div>
           <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 6, columnGap: 12, fontSize: '0.72rem', color: 'var(--t3)' }}>
-            <span>CPU</span><span style={{ color: 'var(--t2)' }}>{systemStats.cpu}%</span>
+            <span>CPU</span><span style={{ color: 'var(--t2)' }}>{systemStats.cpu !== '--' ? `${systemStats.cpu}%` : '--'}</span>
             <span>Up</span><span style={{ color: 'var(--t2)' }}>{systemStats.up} Mbps</span>
             <span>Down</span><span style={{ color: 'var(--t2)' }}>{systemStats.down} Mbps</span>
-            <span>Latency</span><span style={{ color: 'var(--t2)' }}>{systemStats.latency} ms</span>
+            <span>Latency</span><span style={{ color: 'var(--t2)' }}>{systemStats.latency !== '--' ? `${systemStats.latency} ms` : '--'}</span>
             <span>Codec</span><span style={{ color: 'var(--t2)' }}>{systemStats.codec}</span>
           </div>
         </div>
@@ -259,15 +279,15 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
       <div className="sidebar-footer" style={{ padding: '12px', borderTop: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--t3)', fontWeight: 600, marginBottom: 4, letterSpacing: '0.02em' }}>
           <span>Archive</span>
-          <span>{recordingStorage ? `${recordingStorage.total_gb} GB` : '0 GB'}</span>
+          <span>{recordingStorage ? `${recordingStorage.total_gb} GB` : (storage ? `${(storage.used_gb ?? (storage.total_gb - storage.free_gb)).toFixed(1)} GB` : '0 GB')}</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--t3)', fontWeight: 600, marginBottom: 6, letterSpacing: '0.02em' }}>
           <span>Server disk</span>
-          <span>{storage ? `${(storage.total_gb - storage.free_gb).toFixed(1)} GB` : '--'}</span>
+          <span>{storage ? `${(storage.used_gb ?? (storage.total_gb - storage.free_gb)).toFixed(1)} GB` : '--'}</span>
         </div>
         
         <div style={{ height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
-          <div style={{ width: `${storage ? storage.usage_percent : 0}%`, height: '100%', background: 'var(--cyan)' }} />
+          <div style={{ width: `${storage ? Math.min(100, Math.max(0, storage.usage_percent)) : 0}%`, height: '100%', background: 'var(--cyan)' }} />
         </div>
         <div style={{ fontSize: '0.6rem', color: 'var(--t3)', textAlign: 'right', fontFamily: 'monospace' }}>
           {storage ? `${storage.usage_percent}% full` : ''}

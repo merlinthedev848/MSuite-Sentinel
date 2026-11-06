@@ -109,7 +109,8 @@ class LocalCore:
                 snapshot["health"] = self._health_payload()
             except Exception:
                 pass
-            asyncio.create_task(self.refresh_snapshot(include_storage=True))
+        # Always trigger fresh background refresh for new subscriber
+        asyncio.create_task(self.refresh_snapshot(include_storage=False))
         queue.put_nowait({"type": "snapshot", "payload": snapshot})
         return queue
 
@@ -120,12 +121,20 @@ class LocalCore:
     async def refresh_snapshot(self, *, include_storage: bool = False) -> dict[str, Any]:
         from api.services.recorder import recorder_manager, storage_report
 
+        rec_status = {}
+        rec_diags = {}
+        try:
+            rec_status = recorder_manager.status()
+            rec_diags = recorder_manager.diagnostics()
+        except Exception:
+            pass
+
         cameras: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
         try:
             async with async_session_maker() as db:
                 cameras_result = await db.execute(select(Camera))
-                cameras = [_camera_payload(camera) for camera in cameras_result.scalars().all()]
+                cameras = [_camera_payload(camera, rec_status) for camera in cameras_result.scalars().all()]
 
                 events_result = await db.execute(
                     select(SemanticEvent).order_by(desc(SemanticEvent.timestamp)).limit(20)
@@ -264,14 +273,25 @@ def sse_pack(event: dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {json.dumps(event, separators=(',', ':'))}\n\n"
 
 
-def _camera_payload(camera: Camera) -> dict[str, Any]:
+def _camera_payload(camera: Camera, rec_status: dict[str, str] | None = None) -> dict[str, Any]:
     from api.security import mask_rtsp_url
+    rec_state = (rec_status or {}).get(camera.id)
+    if not camera.enabled:
+        effective_status = "disabled"
+    elif rec_state == "recording":
+        effective_status = "online"
+    elif rec_state in ("backoff", "error"):
+        effective_status = "offline"
+    else:
+        effective_status = camera.status or "online"
+
     return {
         "id": camera.id,
         "name": camera.name,
         "location": camera.location,
-        "status": camera.status,
+        "status": effective_status,
         "enabled": camera.enabled,
+        "recording_state": rec_state or "idle",
         "rtsp_url_main": mask_rtsp_url(camera.rtsp_url_main),
         "rtsp_url_sub": mask_rtsp_url(camera.rtsp_url_sub),
         "manufacturer": camera.manufacturer,
