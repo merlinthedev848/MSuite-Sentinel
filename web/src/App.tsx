@@ -18,18 +18,26 @@ const Settings = lazy(() => import('./pages/Settings'));
 const Wallboard = lazy(() => import('./pages/Wallboard'));
 const MobileView = lazy(() => import('./pages/MobileView'));
 
-try {
-  localStorage.removeItem('mview_token');
-} catch {
-  /* storage can be blocked; the cookie is the session */
-}
+/* Token preserved across sessions for cross-origin & API client consistency */
 
 const originalFetch = window.fetch;
 window.fetch = async (...args) => {
   const [resource, config] = args;
   const nextConfig: RequestInit = { ...(config || {}) };
-  if (!nextConfig.credentials) nextConfig.credentials = 'same-origin';
-  const url = typeof resource === 'string' ? resource : '';
+  if (!nextConfig.credentials) nextConfig.credentials = 'include';
+  try {
+    const token = localStorage.getItem('mview_token');
+    if (token) {
+      const headers = new Headers(nextConfig.headers || {});
+      if (!headers.has('Authorization')) {
+        headers.set('Authorization', `Bearer ${token}`);
+      }
+      nextConfig.headers = headers;
+    }
+  } catch {
+    /* storage can be blocked */
+  }
+  const url = typeof resource === 'string' ? resource : (resource instanceof Request ? resource.url : '');
   const res = await originalFetch(resource, nextConfig);
   const sessionProbe = url.includes('/auth/login') || url.includes('/auth/me') || url.includes('/auth/logout');
   if (res.status === 401 && url && !sessionProbe) {
@@ -175,11 +183,11 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
   const navItems = [
     { to: '/dashboard',  label: 'Dashboard',     icon: <LayoutDashboard size={16} />, end: false },
     { to: '/',           label: 'Live View',     icon: <Video           size={16} />, end: true  },
-    { to: '/wallboard',  label: 'Wallboard NOC', icon: <Tv              size={16} />, end: false },
-    { to: '/map',        label: 'Spatial Map',   icon: <Map             size={16} />, end: false },
+    { to: '/wallboard',  label: 'Wallboard NOC', icon: <Tv              size={16} />, end: false, desktopOnly: true },
+    { to: '/map',        label: 'Spatial Map',   icon: <Map             size={16} />, end: false, desktopOnly: true },
     { to: '/playback',   label: 'Playback',      icon: <PlaySquare      size={16} />, end: false },
     { to: '/events',     label: 'Events',        icon: <Bell            size={16} />, end: false, badge: unreadEvents || undefined },
-    { to: '/operations', label: 'Operations',    icon: <HardDrive       size={16} />, end: false },
+    { to: '/operations', label: 'Operations',    icon: <HardDrive       size={16} />, end: false, desktopOnly: true },
     { to: '/settings',   label: 'Settings',      icon: <SettingsIcon    size={16} />, end: false },
   ];
 
@@ -205,51 +213,51 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
             key={item.to}
             to={item.to}
             end={item.end}
-            className={({ isActive }: { isActive: boolean }) => `nav-item${isActive ? ' active' : ''}`}
+            className={({ isActive }: { isActive: boolean }) => `nav-item${(item as any).desktopOnly ? ' nav-desktop-only' : ''}${isActive ? ' active' : ''}`}
           >
             {item.icon}
-            {item.label}
+            <span>{item.label}</span>
             {item.badge ? <span className="nav-badge">{item.badge > 99 ? '99+' : item.badge}</span> : null}
           </NavLink>
         ))}
 
         <button 
-          className={`nav-item${showAIActive ? ' active' : ''}`} 
+          className={`nav-item nav-desktop-only${showAIActive ? ' active' : ''}`} 
           onClick={onToggleAI}
-          style={{ border: 'none', background: 'transparent', textAlign: 'left', width: '100%', cursor: 'pointer', outline: 'none', display: 'flex', alignItems: 'center', gap: 10 }}
+          aria-label="Toggle AI Operator assistant"
         >
           <Bot size={16} style={{ color: 'var(--pink)' }} />
-          AI Operator
+          <span>AI Operator</span>
         </button>
 
         <button 
-          className="nav-item"
+          className="nav-item nav-desktop-only"
           onClick={() => {
             const next = audioAlerts.toggle();
             audioAlerts.playChime('info');
             setAudioEnabled(next);
           }}
-          style={{ border: 'none', background: 'transparent', textAlign: 'left', width: '100%', cursor: 'pointer', outline: 'none', display: 'flex', alignItems: 'center', gap: 10 }}
+          aria-label="Toggle audio alerts"
         >
           {audioEnabled ? <Volume2 size={16} style={{ color: 'var(--cyan)' }} /> : <VolumeX size={16} style={{ color: 'var(--t3)' }} />}
-          Alert Sound: {audioEnabled ? 'ON' : 'OFF'}
+          <span>Alert Sound: {audioEnabled ? 'ON' : 'OFF'}</span>
         </button>
 
         <button 
-          className="nav-item"
+          className="nav-item nav-desktop-only"
           onClick={() => {
             setViewPreference('mobile');
             navigate('/mobile');
           }}
-          style={{ border: 'none', background: 'transparent', textAlign: 'left', width: '100%', cursor: 'pointer', outline: 'none', display: 'flex', alignItems: 'center', gap: 10 }}
+          aria-label="Switch to Mobile View"
         >
           <Smartphone size={16} style={{ color: 'var(--cyan)' }} />
-          Mobile View
+          <span>Mobile View</span>
         </button>
 
         <div className="nav-section">System</div>
 
-        <div style={{ padding: '6px 10px' }}>
+        <div className="sidebar-system-stats" style={{ padding: '6px 10px' }}>
           {/* Camera summary */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>

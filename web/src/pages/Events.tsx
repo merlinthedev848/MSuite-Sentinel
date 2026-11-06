@@ -280,6 +280,8 @@ const Events: React.FC = () => {
                       <img
                         src={apiUrl(`/events/${ev.id}/thumbnail`)}
                         alt=""
+                        loading="lazy"
+                        decoding="async"
                         onError={e => { e.currentTarget.style.display = 'none'; }}
                         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
                       />
@@ -327,6 +329,7 @@ const Events: React.FC = () => {
                       <button
                         className="btn-ghost"
                         title="Mark as Useful / Confirmed"
+                        aria-label="Mark event as Useful / Confirmed"
                         onClick={(e) => handleReview(e, ev.id, 'useful')}
                         style={{
                           border: reviewMap[ev.id] === 'useful' ? '1px solid var(--green)' : '1px solid transparent',
@@ -346,6 +349,7 @@ const Events: React.FC = () => {
                       <button
                         className="btn-ghost"
                         title="Mark as False Positive"
+                        aria-label="Mark event as False Positive"
                         onClick={(e) => handleReview(e, ev.id, 'false_positive')}
                         style={{
                           border: reviewMap[ev.id] === 'false_positive' ? '1px solid var(--red)' : '1px solid transparent',

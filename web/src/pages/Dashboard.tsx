@@ -179,7 +179,7 @@ export const Dashboard = () => {
           </div>
         </header>
 
-        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 16 }}>
+        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
           {kpis.map(item => {
             const Icon = item.icon;
             return (
@@ -199,7 +199,7 @@ export const Dashboard = () => {
           })}
         </section>
 
-        <section style={{ display: 'grid', gridTemplateColumns: 'minmax(520px, 1.65fr) minmax(320px, 0.95fr)', gap: 20, alignItems: 'stretch', flex: 1, minHeight: 0 }}>
+        <section className="dashboard-main-grid">
           <div style={{ ...panelStyle, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <div style={sectionHeaderStyle}>
               <h2 style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--t1)', fontSize: '0.95rem', margin: 0 }}>
@@ -274,6 +274,8 @@ export const Dashboard = () => {
                         <img
                           src={apiUrl(`/events/${event.id}/thumbnail`)}
                           alt=""
+                          loading="lazy"
+                          decoding="async"
                           onLoad={(e) => { e.currentTarget.style.visibility = 'visible'; }}
                           onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
                           style={{ width: '100%', height: '100%', objectFit: 'cover', visibility: 'visible' }}

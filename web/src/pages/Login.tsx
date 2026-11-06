@@ -33,6 +33,14 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       });
 
       if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data && data.access_token) {
+          try {
+            localStorage.setItem('mview_token', data.access_token);
+          } catch {
+            /* storage may be restricted */
+          }
+        }
         onLogin();
       } else {
         setError('Invalid username or password');
@@ -74,6 +82,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               value={username}
               onChange={e => setUsername(e.target.value)}
               autoCapitalize="none"
+              autoComplete="username"
             />
           </div>
 
@@ -89,6 +98,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               value={password}
               onChange={e => setPassword(e.target.value)}
               autoFocus
+              autoComplete="current-password"
             />
           </div>
 
@@ -104,4 +114,3 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 };
 
 export default Login;
-

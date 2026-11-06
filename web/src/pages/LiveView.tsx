@@ -1210,7 +1210,7 @@ const LiveView: React.FC = () => {
 
       {/* VIEW MODE 3: INTERACTIVE ANALYTICS & DETECTION ZONE STUDIO */}
       {viewMode === 'analytics' && (
-        <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 380px', gap: 14, padding: 14 }}>
+        <div className="analytics-studio-grid">
           {/* LEFT: Canvas & Stream Studio */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
             {/* Camera Switcher Tabs */}
