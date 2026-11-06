@@ -172,7 +172,7 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
                 borderRadius: 16,
                 fontSize: '0.72rem',
                 border: '1px solid var(--mobile-border)',
-                background: activeFilter === f ? 'rgba(0, 210, 255, 0.15)' : 'var(--mobile-surface)',
+                background: activeFilter === f ? 'var(--cyan-dim)' : 'var(--mobile-surface)',
                 color: activeFilter === f ? 'var(--mobile-accent)' : 'var(--mobile-text-muted)',
                 fontWeight: activeFilter === f ? 600 : 400,
                 cursor: 'pointer',
@@ -312,8 +312,8 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
 
                   <button
                     style={{
-                      background: 'rgba(0, 210, 255, 0.12)',
-                      border: '1px solid rgba(0, 210, 255, 0.3)',
+                      background: 'var(--cyan-dim)',
+                      border: '1px solid var(--cyan-border)',
                       color: 'var(--mobile-accent)',
                       borderRadius: 8,
                       padding: '6px 10px',
@@ -343,7 +343,7 @@ export const MobileEvents: React.FC<MobileEventsProps> = ({
                 alignItems: 'center',
                 gap: 6,
                 color: 'var(--mobile-accent)',
-                borderColor: 'rgba(0, 210, 255, 0.3)',
+                borderColor: 'var(--cyan-border)',
                 fontSize: '0.75rem',
                 cursor: 'pointer'
               }}

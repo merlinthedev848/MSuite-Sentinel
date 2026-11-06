@@ -1124,7 +1124,7 @@ const Settings: React.FC = () => {
                                     {zone.points.length >= 2 && (
                                       <polygon
                                         points={zone.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                        fill={zone.id === activeZoneId ? 'rgba(0, 230, 118, 0.22)' : 'rgba(0, 229, 255, 0.14)'}
+                                        fill={zone.id === activeZoneId ? 'rgba(0, 230, 118, 0.22)' : 'var(--cyan-dim)'}
                                         stroke={zone.id === activeZoneId ? 'var(--green)' : 'var(--cyan)'}
                                         strokeWidth="0.004"
                                       />
@@ -1685,11 +1685,11 @@ const Settings: React.FC = () => {
                       disabled={testingAi}
                       style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                     >
-                      {testingAi ? <Loader size={14} className="spin" /> : <Zap size={14} color="#00d2ff" />}
+                      {testingAi ? <Loader size={14} className="spin" /> : <Zap size={14} color="var(--cyan)" />}
                       {testingAi ? 'Testing Latency...' : 'Test AI Connection & Latency'}
                     </button>
                     {aiTestResult && (
-                      <div style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 8, color: aiTestResult.ok ? '#2ed573' : '#ff4757' }}>
+                      <div style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 8, color: aiTestResult.ok ? 'var(--green)' : 'var(--red)' }}>
                         {aiTestResult.ok ? <CheckCircle size={15} /> : <X size={15} />}
                         <span>{aiTestResult.message}</span>
                         {aiTestResult.models_found && aiTestResult.models_found.length > 0 && (

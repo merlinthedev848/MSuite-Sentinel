@@ -410,7 +410,7 @@ const AIOperatorDrawer: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
           style={{ flex: 1, fontSize: '0.78rem' }}
           disabled={loading}
         />
-        <button className="btn btn-primary" type="submit" style={{ padding: '8px 12px' }} disabled={loading}>
+        <button className="btn btn-primary" type="submit" style={{ padding: '8px 12px' }} disabled={loading} aria-label="Send message to AI Operator">
           <Send size={14} />
         </button>
       </form>

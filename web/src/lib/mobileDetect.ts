@@ -22,9 +22,11 @@ export function isMobileDevice(): boolean {
  */
 export function getViewPreference(): ViewPreference {
   try {
-    const val = localStorage.getItem(PREF_KEY);
-    if (val === 'mobile' || val === 'desktop' || val === 'auto') {
-      return val;
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      const val = localStorage.getItem(PREF_KEY);
+      if (val === 'mobile' || val === 'desktop' || val === 'auto') {
+        return val;
+      }
     }
   } catch {}
   return 'auto';
@@ -35,7 +37,9 @@ export function getViewPreference(): ViewPreference {
  */
 export function setViewPreference(pref: ViewPreference): void {
   try {
-    localStorage.setItem(PREF_KEY, pref);
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      localStorage.setItem(PREF_KEY, pref);
+    }
   } catch {}
 }
 

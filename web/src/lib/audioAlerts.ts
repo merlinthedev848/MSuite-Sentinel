@@ -3,8 +3,12 @@ class AudioAlertSystem {
   private enabled: boolean = true;
 
   constructor() {
-    const saved = localStorage.getItem('mview_audio_alerts');
-    this.enabled = saved !== null ? saved === 'true' : true;
+    try {
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        const saved = localStorage.getItem('mview_audio_alerts');
+        this.enabled = saved !== null ? saved === 'true' : true;
+      }
+    } catch {}
   }
 
   public isEnabled(): boolean {
@@ -13,7 +17,11 @@ class AudioAlertSystem {
 
   public toggle(): boolean {
     this.enabled = !this.enabled;
-    localStorage.setItem('mview_audio_alerts', String(this.enabled));
+    try {
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        localStorage.setItem('mview_audio_alerts', String(this.enabled));
+      }
+    } catch {}
     return this.enabled;
   }
 

@@ -203,8 +203,8 @@ export const MobileView: React.FC<MobileViewProps> = ({ onLogout }) => {
             <button
               onClick={handleSwitchToDesktop}
               style={{
-                background: 'rgba(0, 210, 255, 0.15)',
-                border: '1px solid rgba(0, 210, 255, 0.3)',
+                background: 'var(--cyan-dim)',
+                border: '1px solid var(--cyan-border)',
                 color: 'var(--mobile-accent)',
                 borderRadius: 6,
                 padding: '2px 8px',
@@ -424,6 +424,7 @@ export const MobileView: React.FC<MobileViewProps> = ({ onLogout }) => {
                   color: '#000',
                   cursor: 'pointer'
                 }}
+                aria-label="Send message to AI Operator"
               >
                 <Send size={14} />
               </button>

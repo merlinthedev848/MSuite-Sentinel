@@ -169,7 +169,7 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
                   setFullViewCamId(null);
                   onSelectCameraForPlayback(activeFullViewCam.id);
                 }}
-                style={{ color: 'var(--mobile-accent)', borderColor: 'rgba(0, 210, 255, 0.3)' }}
+                style={{ color: 'var(--mobile-accent)', borderColor: 'var(--cyan-border)' }}
               >
                 <PlaySquare size={15} /> Playback
               </button>
@@ -374,7 +374,7 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
                 <button
                   className="mobile-ctrl-btn"
                   onClick={() => onSelectCameraForPlayback(cam.id)}
-                  style={{ color: 'var(--mobile-accent)', borderColor: 'rgba(0, 210, 255, 0.3)' }}
+                  style={{ color: 'var(--mobile-accent)', borderColor: 'var(--cyan-border)' }}
                 >
                   <PlaySquare size={14} /> Playback
                 </button>

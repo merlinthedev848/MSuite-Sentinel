@@ -3,19 +3,19 @@
    ========================================================================== */
 
 :root {
-  --mobile-bg: #0f1115;
-  --mobile-surface: #161920;
-  --mobile-surface-hover: #1e222b;
-  --mobile-surface-active: #252b36;
-  --mobile-border: #262c37;
-  --mobile-accent: #00d2ff;
-  --mobile-accent-glow: rgba(0, 210, 255, 0.2);
-  --mobile-danger: #ff4757;
-  --mobile-success: #2ed573;
-  --mobile-warning: #ffa502;
-  --mobile-text: #f1f2f6;
-  --mobile-text-muted: #8e95a5;
-  --mobile-text-dim: #57606f;
+  --mobile-bg: #181b24;
+  --mobile-surface: #1f232f;
+  --mobile-surface-hover: #252a38;
+  --mobile-surface-active: #2e3547;
+  --mobile-border: #2e3547;
+  --mobile-accent: #3b82f6;
+  --mobile-accent-glow: rgba(59, 130, 246, 0.2);
+  --mobile-danger: #ef4444;
+  --mobile-success: #10b981;
+  --mobile-warning: #f59e0b;
+  --mobile-text: #f8fafc;
+  --mobile-text-muted: #cbd5e1;
+  --mobile-text-dim: #8492a6;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 16px);
 }
@@ -299,7 +299,7 @@
 }
 
 .mobile-chip.active {
-  background: rgba(0, 210, 255, 0.12);
+  background: rgba(59, 130, 246, 0.12);
   border-color: var(--mobile-accent);
   color: var(--mobile-accent);
   font-weight: 600;
@@ -543,8 +543,8 @@
 }
 
 .mobile-badge-person {
-  color: #00d2ff;
-  background: rgba(0, 210, 255, 0.12);
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.12);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 0.68rem;
@@ -736,7 +736,7 @@
 }
 
 .mobile-export-tab-btn.active {
-  background: rgba(0, 210, 255, 0.15);
+  background: rgba(59, 130, 246, 0.15);
   color: var(--mobile-accent);
   border-color: var(--mobile-accent);
 }

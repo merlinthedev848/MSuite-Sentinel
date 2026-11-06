@@ -127,7 +127,7 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
         >
           <ArrowLeft size={18} />
         </button>
-        <button className="btn btn-outline" style={{ padding: '10px', background: 'rgba(255,255,255,0.06)', color: 'var(--t1)' }}>
+        <button className="btn btn-outline" style={{ padding: '10px', background: 'rgba(255,255,255,0.06)', color: 'var(--t1)' }} aria-label="Center camera">
           <Crosshair size={18} />
         </button>
         <button 
@@ -226,7 +226,7 @@ export const PTZControls: React.FC<PTZControlsProps> = ({ cameraId }) => {
             value={newPresetName}
             onChange={e => setNewPresetName(e.target.value)}
           />
-          <button className="btn btn-primary" onClick={savePreset} style={{ height: 26, padding: '0 8px', fontSize: '0.7rem' }}>
+          <button className="btn btn-primary" onClick={savePreset} style={{ height: 26, padding: '0 8px', fontSize: '0.7rem' }} aria-label="Add PTZ preset">
             <Plus size={12} />
           </button>
         </div>

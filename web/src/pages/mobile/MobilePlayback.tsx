@@ -661,7 +661,7 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
                 setExportError('');
                 setExportResult(null);
               }}
-              style={{ color: 'var(--mobile-accent)', borderColor: 'rgba(0, 210, 255, 0.3)' }}
+              style={{ color: 'var(--mobile-accent)', borderColor: 'var(--cyan-border)' }}
               title="Export Video Recording"
             >
               <Download size={14} /> Export
@@ -727,7 +727,7 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
                 borderRadius: 14,
                 fontSize: '0.72rem',
                 border: '1px solid var(--mobile-border)',
-                background: activeFilter === f ? 'rgba(0, 210, 255, 0.15)' : 'var(--mobile-bg)',
+                background: activeFilter === f ? 'var(--cyan-dim)' : 'var(--mobile-bg)',
                 color: activeFilter === f ? 'var(--mobile-accent)' : 'var(--mobile-text-muted)',
                 fontWeight: activeFilter === f ? 600 : 400,
                 cursor: 'pointer',
@@ -905,7 +905,7 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
                           padding: '7px 4px',
                           borderRadius: 8,
                           fontSize: '0.72rem',
-                          background: exportMinutesPreset === mins ? 'rgba(0, 210, 255, 0.15)' : 'var(--mobile-bg)',
+                          background: exportMinutesPreset === mins ? 'var(--cyan-dim)' : 'var(--mobile-bg)',
                           border: `1px solid ${exportMinutesPreset === mins ? 'var(--mobile-accent)' : 'var(--mobile-border)'}`,
                           color: exportMinutesPreset === mins ? 'var(--mobile-accent)' : 'var(--mobile-text-muted)',
                           fontWeight: exportMinutesPreset === mins ? 600 : 400,

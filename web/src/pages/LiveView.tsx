@@ -195,9 +195,9 @@ const cameraToAnalyticsZones = (cam: Camera): AnalyticsZone[] => {
 };
 
 const ZONE_COLORS: Record<string, { border: string; bg: string; label: string }> = {
-  motion: { border: '#00d2ff', bg: 'rgba(0, 210, 255, 0.14)', label: 'Motion' },
-  intrusion: { border: '#ff4757', bg: 'rgba(255, 71, 87, 0.16)', label: 'Intrusion' },
-  tripwire: { border: '#ffa502', bg: 'rgba(255, 165, 2, 0.14)', label: 'Tripwire' },
+  motion: { border: 'var(--cyan)', bg: 'var(--cyan-dim)', label: 'Motion' },
+  intrusion: { border: 'var(--red)', bg: 'var(--red-dim)', label: 'Intrusion' },
+  tripwire: { border: 'var(--amber)', bg: 'rgba(255, 165, 2, 0.14)', label: 'Tripwire' },
   privacy: { border: '#9b59b6', bg: 'rgba(20, 24, 33, 0.92)', label: 'Privacy Mask' },
 };
 
@@ -1019,7 +1019,7 @@ const LiveView: React.FC = () => {
               alignItems: 'center',
               padding: '0 8px',
               border: patrolMode ? '1px solid var(--cyan-border)' : '1px solid transparent',
-              background: patrolMode ? 'rgba(0, 210, 255, 0.08)' : 'transparent',
+              background: patrolMode ? 'rgba(59, 130, 246, 0.08)' : 'transparent',
             }}
           >
             <Activity size={12} />
@@ -1330,9 +1330,9 @@ const LiveView: React.FC = () => {
                           width: `${zone.w}%`,
                           height: `${zone.h}%`,
                           border: isSelected ? '2px solid var(--cyan)' : `2px solid ${theme.border}`,
-                          background: isSelected ? 'rgba(0, 210, 255, 0.22)' : theme.bg,
+                          background: isSelected ? 'var(--cyan-dim)' : theme.bg,
                           boxShadow: isSelected
-                            ? '0 0 16px rgba(0, 210, 255, 0.6), inset 0 0 12px rgba(0, 210, 255, 0.2)'
+                            ? '0 0 16px var(--cyan-glow), inset 0 0 12px var(--cyan-glow)'
                             : `0 0 8px ${theme.border}30`,
                           cursor: 'move',
                           userSelect: 'none',
@@ -1627,7 +1627,7 @@ const LiveView: React.FC = () => {
                               borderRadius: 4,
                               cursor: 'pointer',
                               border: isIncluded ? '1px solid var(--cyan)' : '1px solid var(--border)',
-                              background: isIncluded ? 'rgba(0, 210, 255, 0.15)' : 'transparent',
+                              background: isIncluded ? 'var(--cyan-dim)' : 'transparent',
                               color: isIncluded ? 'var(--cyan)' : 'var(--t2)',
                               textTransform: 'capitalize',
                               transition: 'all 0.15s',
@@ -1697,7 +1697,7 @@ const LiveView: React.FC = () => {
                           justifyContent: 'space-between',
                           padding: '6px 10px',
                           borderRadius: 6,
-                          background: isSelected ? 'rgba(0, 210, 255, 0.1)' : 'rgba(255, 255, 255, 0.02)',
+                          background: isSelected ? 'var(--cyan-dim)' : 'rgba(255, 255, 255, 0.02)',
                           border: isSelected ? '1px solid var(--cyan)' : '1px solid var(--border)',
                           cursor: 'pointer',
                         }}
@@ -1784,7 +1784,7 @@ const LiveView: React.FC = () => {
                     <BarChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
                       <XAxis dataKey="name" stroke="var(--t3)" tick={{ fontSize: 10 }} />
                       <YAxis stroke="var(--t3)" allowDecimals={false} tick={{ fontSize: 10 }} />
-                      <Tooltip contentStyle={{ background: '#161920', border: '1px solid var(--border)', fontSize: '0.72rem' }} />
+                      <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', fontSize: '0.72rem' }} />
                       <Bar dataKey="count" fill="var(--cyan)" radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>

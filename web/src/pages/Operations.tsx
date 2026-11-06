@@ -484,8 +484,8 @@ const Operations: React.FC = () => {
                       width: 42,
                       height: 42,
                       borderRadius: 10,
-                      background: 'rgba(0, 210, 255, 0.1)',
-                      border: '1px solid rgba(0, 210, 255, 0.3)',
+                      background: 'var(--cyan-dim)',
+                      border: '1px solid var(--cyan-border)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -504,7 +504,7 @@ const Operations: React.FC = () => {
                       </div>
                       <div style={{ color: 'var(--t3)', fontSize: '0.78rem', marginTop: 2 }}>
                         Model: <strong style={{ color: 'var(--t1)' }}>{aiStatus?.model || 'default'}</strong> · Endpoint: <code style={{ color: 'var(--cyan)' }}>{aiStatus?.endpoint || 'internal'}</code>
-                        {aiLatency !== null && <span style={{ marginLeft: 8, color: '#2ed573' }}>· Latency: {aiLatency}ms</span>}
+                        {aiLatency !== null && <span style={{ marginLeft: 8, color: 'var(--green)' }}>· Latency: {aiLatency}ms</span>}
                       </div>
                     </div>
                   </div>
@@ -627,7 +627,7 @@ const Operations: React.FC = () => {
                 {/* AI Assessment & Action Suggestions */}
                 <div className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <div style={{ fontWeight: 700, fontSize: '0.92rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <CheckCircle2 size={16} color="#2ed573" />
+                    <CheckCircle2 size={16} color="var(--green)" />
                     <span>AI Threat Intelligence & Action Suggestions</span>
                   </div>
 
@@ -642,15 +642,15 @@ const Operations: React.FC = () => {
                           fontWeight: 800,
                           fontSize: '0.85rem',
                           background: aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? 'rgba(255, 71, 87, 0.15)' : (aiAnalysisResult.threat_level === 'MEDIUM' ? 'rgba(255, 165, 2, 0.15)' : 'rgba(46, 213, 115, 0.15)'),
-                          border: `1px solid ${aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? '#ff4757' : (aiAnalysisResult.threat_level === 'MEDIUM' ? '#ffa502' : '#2ed573')}`,
-                          color: aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? '#ff4757' : (aiAnalysisResult.threat_level === 'MEDIUM' ? '#ffa502' : '#2ed573'),
+                          border: `1px solid ${aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? 'var(--red)' : (aiAnalysisResult.threat_level === 'MEDIUM' ? 'var(--amber)' : 'var(--green)')}`,
+                          color: aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? 'var(--red)' : (aiAnalysisResult.threat_level === 'MEDIUM' ? 'var(--amber)' : 'var(--green)'),
                         }}>
                           {aiAnalysisResult.threat_level}
                         </span>
                       </div>
 
                       {/* Scene Description */}
-                      <div style={{ padding: 14, background: 'rgba(0, 210, 255, 0.03)', borderRadius: 8, border: '1px solid rgba(0, 210, 255, 0.15)' }}>
+                      <div style={{ padding: 14, background: 'rgba(0, 210, 255, 0.03)', borderRadius: 8, border: '1px solid var(--cyan-dim)' }}>
                         <div style={{ fontSize: '0.72rem', color: 'var(--cyan)', fontWeight: 700, textTransform: 'uppercase', marginBottom: 6 }}>
                           AI Visual Scene Summary
                         </div>
