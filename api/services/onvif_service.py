@@ -425,3 +425,54 @@ class ONVIFService:
 
 onvif_service = ONVIFService()
 
+
+
+async def request_onvif_keyframe(
+    ip: str,
+    port: int = 80,
+    username: str | None = None,
+    password: str | None = None,
+    profile_token: str | None = None,
+    timeout: float = 1.0,
+) -> bool:
+    """Send an ONVIF SetSynchronizationPoint command to force immediate IDR keyframe emission."""
+    import httpx
+    token = profile_token or "Profile_1"
+    body_media1 = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
+        'xmlns:trt="http://www.onvif.org/ver10/media/wsdl">'
+        f'<s:Body><trt:SetSynchronizationPoint><trt:ProfileToken>{token}</trt:ProfileToken></trt:SetSynchronizationPoint></s:Body>'
+        '</s:Envelope>'
+    )
+    body_media2 = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
+        'xmlns:tr2="http://www.onvif.org/ver20/media/wsdl">'
+        f'<s:Body><tr2:SetSynchronizationPoint><tr2:ProfileToken>{token}</tr2:ProfileToken></tr2:SetSynchronizationPoint></s:Body>'
+        '</s:Envelope>'
+    )
+    headers = {"Content-Type": "application/soap+xml; charset=utf-8"}
+    endpoints = [
+        f"http://{ip}:{port}/onvif/media_service",
+        f"http://{ip}:{port}/onvif/Media",
+        f"http://{ip}:{port}/onvif/media2_service",
+        f"http://{ip}:{port}/onvif/Media2",
+    ]
+    auth = httpx.DigestAuth(username, password) if username and password else None
+    basic = (username, password) if username and password else None
+
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        for ep in endpoints:
+            is_m2 = "media2" in ep.lower()
+            soap_body = body_media2 if is_m2 else body_media1
+            try:
+                resp = await client.post(ep, content=soap_body, headers=headers, auth=auth)
+                if resp.status_code == 401 and basic:
+                    resp = await client.post(ep, content=soap_body, headers=headers, auth=basic)
+                if resp.status_code in (200, 204):
+                    logger.debug("ONVIF SetSynchronizationPoint succeeded on %s", ep)
+                    return True
+            except Exception:
+                continue
+    return False

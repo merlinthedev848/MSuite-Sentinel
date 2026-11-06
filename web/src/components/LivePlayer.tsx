@@ -155,23 +155,9 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
       if (!active) return;
       closeMedia();
       let src = quality === 'main' ? `${cameraId}_main` : cameraId;
-      try {
-        const registered = await fetch(
-          apiUrl(`/cameras/${encodeURIComponent(cameraId)}/ensure-stream?quality=${quality}`),
-          { method: 'POST' },
-        );
-        if (!active || gen !== generation) return;
-        if (registered.status === 400) {
-          setMode('unavailable');
-          return;
-        }
-        if (registered.ok) {
-          const body = await registered.json().catch(() => null);
-          if (body?.src) src = String(body.src);
-        }
-      } catch {
-        if (!active || gen !== generation) return;
-      }
+      // Trigger stream registration and hardware keyframe generation in background
+      fetch(apiUrl(`/cameras/${encodeURIComponent(cameraId)}/ensure-stream?quality=${quality}`), { method: 'POST' })
+        .catch(() => {});
 
       if (!active || gen !== generation) return;
       const video = localVideo.current;
@@ -190,6 +176,8 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
       const queue: ArrayBuffer[] = [];
       let sourceBuffer: SourceBuffer | null = null;
       let sawFrame = false;
+      let initialEdgeJumped = false;
+      let lastHardSeekTime = 0;
 
       const pump = () => {
         if (!sourceBuffer || sourceBuffer.updating || queue.length === 0 || media?.readyState !== 'open') return;
@@ -294,17 +282,32 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
                   sawFrame = true;
                   window.clearTimeout(idle);
                   setMode('mse');
-                  const lag = end - videoEl.currentTime;
 
-                  // Sub-second ultra-low latency live edge lock (50ms - 200ms target latency)
-                  if (lag > 0.35 || videoEl.currentTime < end - 0.35) {
-                    videoEl.currentTime = Math.max(0, end - 0.08);
+                  // Initial lock onto live edge instantly upon first decoded frame
+                  if (!initialEdgeJumped && !videoEl.seeking) {
+                    if (end > 0.15) {
+                      videoEl.currentTime = Math.max(0, end - 0.05);
+                      initialEdgeJumped = true;
+                      lastHardSeekTime = Date.now();
+                    }
+                  }
+
+                  const lag = end - videoEl.currentTime;
+                  const now = Date.now();
+
+                  // Sub-second ultra-low latency live edge synchronization
+                  if (lag > 1.8 && !videoEl.seeking && (now - lastHardSeekTime > 2000)) {
+                    // Stalled or large lag: hard seek to live edge with debounce
+                    videoEl.currentTime = Math.max(0, end - 0.05);
                     videoEl.playbackRate = 1.0;
-                  } else if (lag > 0.16) {
-                    videoEl.playbackRate = 1.08;
-                  } else if (lag < 0.05) {
+                    lastHardSeekTime = now;
+                  } else if (lag > 0.20) {
+                    // Smooth, artifact-free catchup without video stutters or seek cancellations
+                    videoEl.playbackRate = 1.14;
+                  } else if (lag <= 0.08) {
                     videoEl.playbackRate = 1.0;
                   }
+
                   videoEl.muted = muted;
                   if (videoEl.paused) {
                     videoEl.play().catch(() => {});
@@ -327,13 +330,15 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
 
       const jumpToLiveEdge = () => {
         const videoEl = localVideo.current;
-        if (!videoEl || !sourceBuffer || !sourceBuffer.buffered.length) return;
+        if (!videoEl || !sourceBuffer || !sourceBuffer.buffered.length || videoEl.seeking) return;
         try {
           const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
           const lag = end - videoEl.currentTime;
-          if (lag > 0.2) {
-            videoEl.currentTime = Math.max(0, end - 0.08);
+          if (lag > 0.15) {
+            videoEl.currentTime = Math.max(0, end - 0.05);
             videoEl.playbackRate = 1.0;
+            lastHardSeekTime = Date.now();
+            initialEdgeJumped = true;
           }
         } catch {}
       };
@@ -341,30 +346,33 @@ const LivePlayer: React.FC<LivePlayerProps> = ({
       video.addEventListener('loadeddata', jumpToLiveEdge, { once: true });
       video.addEventListener('canplay', jumpToLiveEdge, { once: true });
 
-      // Continuous edge-guard interval to instantly recover from frame drops or clock drift
+      // Continuous edge-guard interval to smoothly recover from frame drops or clock drift
       edgeGuardTimer = window.setInterval(() => {
         if (!active) return;
         const videoEl = localVideo.current;
-        if (!videoEl || videoEl.paused || !sourceBuffer || !sourceBuffer.buffered.length) return;
+        if (!videoEl || videoEl.paused || !sourceBuffer || !sourceBuffer.buffered.length || videoEl.seeking) return;
         try {
           const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
           const lag = end - videoEl.currentTime;
-          if (lag > 0.4) {
-            videoEl.currentTime = Math.max(0, end - 0.08);
+          const now = Date.now();
+          if (lag > 1.8 && (now - lastHardSeekTime > 2000)) {
+            videoEl.currentTime = Math.max(0, end - 0.05);
             videoEl.playbackRate = 1.0;
+            lastHardSeekTime = now;
           }
         } catch {}
-      }, 600);
+      }, 800);
 
       const handleVisibilityChange = () => {
         if (!active) return;
         if (document.visibilityState === 'visible') {
           const videoEl = localVideo.current;
-          if (videoEl && sourceBuffer && sourceBuffer.buffered.length) {
+          if (videoEl && sourceBuffer && sourceBuffer.buffered.length && !videoEl.seeking) {
             try {
               const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
-              videoEl.currentTime = Math.max(0, end - 0.08);
+              videoEl.currentTime = Math.max(0, end - 0.05);
               videoEl.playbackRate = 1.0;
+              lastHardSeekTime = Date.now();
               videoEl.play().catch(() => {});
             } catch {}
           }

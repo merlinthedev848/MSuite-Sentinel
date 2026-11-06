@@ -15,3 +15,5 @@ Thumbs.db
 
 # Local image-build stamps written by install.sh
 .sentinel/
+
+.pytest_cache/

@@ -81,25 +81,56 @@ def _is_jpeg(blob: bytes | None) -> bool:
 
 
 async def request_keyframe(rtsp_url: str | None, username: str | None = None, password: str | None = None) -> None:
-    """Ask the camera to emit an IDR now so the live player does not sit out the GOP."""
-    url = keyframe_url(rtsp_url)
-    if not url:
+    """Ask the camera to emit an IDR now so the live player does not sit out the GOP.
+    Fires concurrently across Hikvision ISAPI, Dahua CGI, and ONVIF SetSynchronizationPoint.
+    """
+    if not rtsp_url:
         return
-    now = time.monotonic()
-    if now - _KEYFRAME_AT.get(url, 0.0) < 2.0:
+    parsed = _host_user_pass(rtsp_url)
+    if not parsed:
         return
-    _KEYFRAME_AT[url] = now
+    host = parsed[0]
     user, secret = _credentials(rtsp_url, username, password)
-    auth = httpx.DigestAuth(user, secret) if user else None
-    body = (
-        b'<?xml version="1.0" encoding="UTF-8"?>'
-        b'<RequestKeyFrame version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema"/>'
-    )
-    try:
-        async with httpx.AsyncClient(timeout=0.8, follow_redirects=False) as client:
-            await client.put(url, auth=auth, content=body, headers={"Content-Type": "application/xml"})
-    except Exception:
+
+    now = time.monotonic()
+    if now - _KEYFRAME_AT.get(host, 0.0) < 1.5:
         return
+    _KEYFRAME_AT[host] = now
+
+    async def _send_hikvision():
+        url = keyframe_url(rtsp_url)
+        if not url:
+            return
+        auth = httpx.DigestAuth(user, secret) if user else None
+        body = (
+            b'<?xml version="1.0" encoding="UTF-8"?>'
+            b'<RequestKeyFrame version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema"/>'
+        )
+        try:
+            async with httpx.AsyncClient(timeout=0.8, follow_redirects=False) as client:
+                await client.put(url, auth=auth, content=body, headers={"Content-Type": "application/xml"})
+        except Exception:
+            pass
+
+    async def _send_dahua():
+        auth = httpx.DigestAuth(user, secret) if user else None
+        url = f"http://{host}/cgi-bin/configManager.cgi?action=setConfig&Encode[0].MainFormat[0].Video.KeyFrameInterval=1"
+        try:
+            async with httpx.AsyncClient(timeout=0.8, follow_redirects=False) as client:
+                await client.get(url, auth=auth)
+        except Exception:
+            pass
+
+    async def _send_onvif():
+        from api.services.onvif_service import request_onvif_keyframe
+        for port in (80, 8000, 8080, 8899):
+            try:
+                if await request_onvif_keyframe(host, port=port, username=user, password=secret):
+                    break
+            except Exception:
+                pass
+
+    await asyncio.gather(_send_hikvision(), _send_dahua(), _send_onvif(), return_exceptions=True)
 
 
 async def fetch_camera_jpeg(

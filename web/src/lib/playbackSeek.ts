@@ -12,7 +12,7 @@ export interface ResolvedClip {
 }
 
 /** A click this close to a segment still lands on it. A gap of hours does not. */
-export const MAX_GAP_SNAP_MS = 30 * 60 * 1000; // Allow instant snap to nearest recording within 30 minutes
+export const MAX_GAP_SNAP_MS = 24 * 60 * 60 * 1000; // Allow instant snap to nearest recording within 24 hours
 
 /**
  * Pick the recording that should play for a timeline instant.
