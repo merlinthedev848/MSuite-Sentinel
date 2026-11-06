@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { Video, PlaySquare, Bell, Settings as SettingsIcon, ShieldCheck, HardDrive, LogOut, Wifi, LayoutDashboard, Map, Bot, Send, X, Volume2, VolumeX, Tv, Smartphone } from 'lucide-react';
+import { Video, PlaySquare, Bell, Settings as SettingsIcon, ShieldCheck, HardDrive, LogOut, LayoutDashboard, Map, Bot, Send, X, Volume2, VolumeX, Tv, Smartphone } from 'lucide-react';
 
 import Login     from './pages/Login';
 import { apiUrl } from './lib/endpoints';
@@ -221,12 +221,14 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
           </NavLink>
         ))}
 
+        <div className="nav-section">Tools</div>
+
         <button 
           className={`nav-item nav-desktop-only${showAIActive ? ' active' : ''}`} 
           onClick={onToggleAI}
           aria-label="Toggle AI Operator assistant"
         >
-          <Bot size={16} style={{ color: 'var(--pink)' }} />
+          <Bot size={15} />
           <span>AI Operator</span>
         </button>
 
@@ -239,8 +241,8 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
           }}
           aria-label="Toggle audio alerts"
         >
-          {audioEnabled ? <Volume2 size={16} style={{ color: 'var(--cyan)' }} /> : <VolumeX size={16} style={{ color: 'var(--t3)' }} />}
-          <span>Alert Sound: {audioEnabled ? 'ON' : 'OFF'}</span>
+          {audioEnabled ? <Volume2 size={15} /> : <VolumeX size={15} style={{ color: 'var(--t3)' }} />}
+          <span>Audio Alert: {audioEnabled ? 'ON' : 'OFF'}</span>
         </button>
 
         <button 
@@ -251,58 +253,38 @@ const Sidebar = ({ onLogout, onToggleAI, showAIActive }: { onLogout: () => void;
           }}
           aria-label="Switch to Mobile View"
         >
-          <Smartphone size={16} style={{ color: 'var(--cyan)' }} />
+          <Smartphone size={15} />
           <span>Mobile View</span>
         </button>
-
-        <div className="nav-section">System</div>
-
-        <div className="sidebar-system-stats" style={{ padding: '6px 10px' }}>
-          {/* Camera summary */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <div className={`dot ${onlineCams > 0 ? 'online' : 'offline'}`} />
-              <span style={{ fontSize: '0.78rem', color: 'var(--t1)', fontWeight: 600 }}>Cameras</span>
-            </div>
-            <span style={{ fontSize: '0.7rem', color: 'var(--t2)' }}>{onlineCams}/{cameras.length}</span>
-          </div>
-
-          {/* Network indicator */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            <Wifi size={13} color="var(--t3)" />
-            <span style={{ fontSize: '0.74rem', color: 'var(--t2)' }}>Network</span>
-            <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: systemStats.network === 'OK' ? 'var(--green)' : 'var(--t2)' }}>{systemStats.network}</span>
-          </div>
-          <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 6, columnGap: 12, fontSize: '0.72rem', color: 'var(--t3)' }}>
-            <span>CPU</span><span style={{ color: 'var(--t2)' }}>{systemStats.cpu !== '--' ? `${systemStats.cpu}%` : '--'}</span>
-            <span>Up</span><span style={{ color: 'var(--t2)' }}>{systemStats.up} Mbps</span>
-            <span>Down</span><span style={{ color: 'var(--t2)' }}>{systemStats.down} Mbps</span>
-            <span>Latency</span><span style={{ color: 'var(--t2)' }}>{systemStats.latency !== '--' ? `${systemStats.latency} ms` : '--'}</span>
-            <span>Codec</span><span style={{ color: 'var(--t2)' }}>{systemStats.codec}</span>
-          </div>
-        </div>
       </nav>
 
-      {/* Storage footer */}
-      <div className="sidebar-footer" style={{ padding: '12px', borderTop: '1px solid var(--border)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--t3)', fontWeight: 600, marginBottom: 4, letterSpacing: '0.02em' }}>
-          <span>Archive</span>
-          <span>{recordingStorage ? `${recordingStorage.total_gb} GB` : (storage ? `${(storage.used_gb ?? (storage.total_gb - storage.free_gb)).toFixed(1)} GB` : '0 GB')}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--t3)', fontWeight: 600, marginBottom: 6, letterSpacing: '0.02em' }}>
-          <span>Server disk</span>
-          <span>{storage ? `${(storage.used_gb ?? (storage.total_gb - storage.free_gb)).toFixed(1)} GB` : '--'}</span>
-        </div>
-        
-        <div style={{ height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
-          <div style={{ width: `${storage ? Math.min(100, Math.max(0, storage.usage_percent)) : 0}%`, height: '100%', background: 'var(--cyan)' }} />
-        </div>
-        <div style={{ fontSize: '0.6rem', color: 'var(--t3)', textAlign: 'right', fontFamily: 'monospace' }}>
-          {storage ? `${storage.usage_percent}% full` : ''}
+      {/* Enterprise Status Footer */}
+      <div className="sidebar-footer" style={{ padding: '12px', borderTop: '1px solid var(--border)', background: 'var(--bg-sidebar)' }}>
+        <div style={{ padding: '10px 12px', borderRadius: 'var(--r-sm)', background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.74rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 600, color: 'var(--t1)' }}>
+              <div className={`dot ${systemStats.network === 'OK' ? 'online' : 'offline'}`} />
+              <span>Appliance</span>
+            </div>
+            <span style={{ fontSize: '0.68rem', color: systemStats.network === 'OK' ? 'var(--green)' : 'var(--t3)', fontWeight: 600 }}>
+              {cameras.length > 0 ? `${onlineCams}/${cameras.length} Online` : (systemStats.network === 'OK' ? 'Optimal' : (systemStats.network || 'Standby'))}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--t3)', marginTop: 8, marginBottom: 4 }}>
+            <span>Storage</span>
+            <span style={{ color: 'var(--t2)', fontFamily: 'monospace' }}>
+              {storage ? `${(storage.used_gb ?? (storage.total_gb - storage.free_gb)).toFixed(1)} / ${storage.total_gb ? storage.total_gb.toFixed(0) : 0} GB` : (recordingStorage ? `${recordingStorage.total_gb} GB` : '0 GB')}
+            </span>
+          </div>
+          
+          <div style={{ height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ width: `${storage ? Math.min(100, Math.max(0, storage.usage_percent)) : 0}%`, height: '100%', background: 'var(--cyan)' }} />
+          </div>
         </div>
 
-        <button className="nav-item" style={{ color: 'var(--t3)', marginTop: 12 }} onClick={onLogout}>
-          <LogOut size={15} /> Logout
+        <button className="nav-item" style={{ color: 'var(--t3)', marginTop: 4, padding: '7px 10px', fontSize: '0.8rem' }} onClick={onLogout}>
+          <LogOut size={14} /> <span>Sign Out</span>
         </button>
       </div>
     </div>

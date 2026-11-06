@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Trash2, Edit2, CheckCircle, X, Loader, ShieldCheck, KeyRound, Activity, Database, Zap } from 'lucide-react';
+import { Search, Plus, Trash2, Edit2, CheckCircle, X, Loader, ShieldCheck, KeyRound, Activity, Database, Zap, Video } from 'lucide-react';
 import { apiUrl } from '../lib/endpoints';
 
 interface Camera {
@@ -939,36 +939,50 @@ const Settings: React.FC = () => {
   const navTabs: { id: Tab; label: string }[] = [
     { id: 'cameras', label: 'Cameras & Hardware' },
     { id: 'ai', label: 'AI & Detection' },
-    { id: 'network', label: 'Network' },
-    { id: 'system', label: 'System' },
-    { id: 'users', label: 'Users & Security' },
+    { id: 'network', label: 'Network & Ports' },
+    { id: 'system', label: 'Storage & Retention' },
+    { id: 'users', label: 'Users & Permissions' },
   ];
   const cameraNameById = Object.fromEntries(cameras.map(cam => [cam.id, cam.name]));
 
   return (
     <div className="settings-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Top Bar */}
-      <div className="topbar settings-page-topbar" style={{ justifyContent: 'space-between' }}>
-        <h1 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--t1)' }}>System Configuration</h1>
-        <span style={{ fontSize: '0.8rem', color: 'var(--t2)' }}>Manage hardware, AI pipelines and network settings</span>
+      <div className="topbar settings-page-topbar" style={{ justifyContent: 'space-between', padding: '0 24px', height: 56, flexShrink: 0 }}>
+        <div>
+          <h1 style={{ fontSize: '0.94rem', fontWeight: 600, color: 'var(--t1)', letterSpacing: '-0.01em' }}>System Configuration</h1>
+          <div style={{ fontSize: '0.72rem', color: 'var(--t3)', marginTop: 2 }}>Hardware bindings, ONVIF discovery, and network topology</div>
+        </div>
       </div>
 
-      <div className="settings-page-layout" style={{ flex: 1, display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, padding: 20, overflow: 'hidden', minHeight: 0 }}>
-        {/* Sidebar nav */}
-        <div className="settings-nav">
-          {navTabs.map(t => (
-            <button
-              key={t.id}
-              className={`nav-item${tab === t.id ? ' active' : ''}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      {/* Horizontal Underline Tabs */}
+      <div style={{ padding: '0 24px', borderBottom: '1px solid var(--border)', background: 'var(--bg-sidebar)', display: 'flex', gap: 28, overflowX: 'auto', flexShrink: 0 }}>
+        {navTabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            style={{
+              padding: '12px 2px',
+              border: 'none',
+              background: 'transparent',
+              color: tab === t.id ? 'var(--t1)' : 'var(--t3)',
+              fontWeight: tab === t.id ? 600 : 500,
+              fontSize: '0.82rem',
+              cursor: 'pointer',
+              position: 'relative',
+              whiteSpace: 'nowrap',
+              transition: 'color 0.15s ease',
+              borderBottom: tab === t.id ? '2px solid var(--cyan)' : '2px solid transparent',
+              marginBottom: -1,
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-        {/* Content */}
-        <div className="settings-page-content" style={{ overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 20, paddingRight: 4, paddingBottom: 100 }}>
+      {/* Content */}
+      <div className="settings-page-content" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 20, padding: '24px', maxWidth: 1100, width: '100%', margin: '0 auto', paddingBottom: 100 }}>
 
           {tab === 'cameras' && (
             <>
@@ -1216,9 +1230,31 @@ const Settings: React.FC = () => {
                 )}
 
                 {cameras.length === 0 ? (
-                  <div className="empty">
-                    <div className="empty-title">No cameras added yet</div>
-                    <div className="empty-sub">Use "Add Camera Manually" above or auto-discover ONVIF devices below.</div>
+                  <div className="empty" style={{ padding: '56px 20px', textAlign: 'center' }}>
+                    <div style={{ width: 44, height: 44, borderRadius: 10, background: 'var(--bg-card-hover)', border: '1px solid var(--border)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--t3)', marginBottom: 12 }}>
+                      <Video size={20} />
+                    </div>
+                    <div className="empty-title" style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--t1)' }}>No cameras configured</div>
+                    <div className="empty-sub" style={{ fontSize: '0.76rem', color: 'var(--t3)', maxWidth: 380, margin: '6px auto 18px', lineHeight: 1.5 }}>
+                      Add an RTSP stream directly with credentials, or scan your local network for ONVIF-compatible devices below.
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                      <button className="btn btn-primary" onClick={() => {
+                        setEditingId(null);
+                        setManualForm(emptyForm);
+                        setOriginalRtsp({ main: '', sub: '' });
+                        setActiveZoneId('');
+                        setZoneSnapshotUrl('');
+                        setZoneSnapshotError('');
+                        setSaveError('');
+                        setShowManualForm(true);
+                      }}>
+                        <Plus size={14} /> Add Camera Manually
+                      </button>
+                      <button className="btn btn-outline" onClick={discover} disabled={discovering}>
+                        <Search size={14} /> Scan Subnet
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div>
@@ -1361,12 +1397,15 @@ const Settings: React.FC = () => {
                   </button>
                 </div>
 
-                <div style={{ padding: '16px 20px', fontSize: '0.82rem', color: 'var(--t2)', borderBottom: '1px solid var(--border)', lineHeight: 1.5, background: 'rgba(0,0,0,0.1)' }}>
-                  <strong style={{ color: 'var(--amber)' }}>⚠ Note:</strong> ONVIF WS-Discovery uses UDP multicast.
-                  If the API runs inside Docker with bridge networking, cameras on your LAN may not be reachable.
-                  For best results, add the line <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 3 }}>network_mode: host</code> to
-                  the <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 3 }}>api</code> service in your docker-compose.yml,
-                  or use the manual form above.
+                <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', background: 'rgba(59, 130, 246, 0.05)' }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', fontSize: '0.78rem', color: 'var(--t2)', lineHeight: 1.5 }}>
+                    <div style={{ color: 'var(--cyan)', marginTop: 1, flexShrink: 0 }}>
+                      <Activity size={16} />
+                    </div>
+                    <div>
+                      <strong style={{ color: 'var(--t1)', fontWeight: 600 }}>Docker Network Mode:</strong> ONVIF WS-Discovery uses UDP multicast (239.255.255.250). In containerized environments, ensure the API container uses <code style={{ background: 'var(--bg-input)', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', fontFamily: 'monospace', fontSize: '0.74rem' }}>network_mode: host</code> so discovery probes reach physical cameras across your switch.
+                    </div>
+                  </div>
                 </div>
 
                 {discoveryError && (
@@ -2277,7 +2316,6 @@ const Settings: React.FC = () => {
               )}
             </div>
           )}
-        </div>
       </div>
 
       {/* Toast */}
