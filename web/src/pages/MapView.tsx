@@ -172,7 +172,7 @@ const MapView = () => {
           onPointerLeave={() => setDraggingId(null)}
           style={{
             position: 'relative',
-            background: floorplan ? `url(${floorplan}) center/contain no-repeat, #121418` : '#121418',
+            background: floorplan ? `url(${floorplan}) center/contain no-repeat, var(--bg)` : 'var(--bg)',
             border: '1px solid var(--surface-border-highlight)',
             display: 'flex',
             alignItems: 'center',
@@ -225,7 +225,7 @@ const MapView = () => {
                   left: '50%',
                   width: 160,
                   height: 160,
-                  background: cam.alert ? 'var(--red-dim)' : isSelected ? 'rgba(0, 210, 255, 0.20)' : 'rgba(168, 180, 194, 0.12)',
+                  background: cam.alert ? 'var(--red-dim)' : isSelected ? 'var(--cyan-dim)' : 'rgba(168, 180, 194, 0.12)',
                   transform: `translate(-50%, -50%) rotate(${cam.rotation}deg)`,
                   clipPath: 'polygon(50% 50%, 0 0, 100% 0)',
                   transformOrigin: 'center',
@@ -235,7 +235,7 @@ const MapView = () => {
                 <div style={{
                   width: 34,
                   height: 34,
-                  background: cam.alert ? 'var(--red)' : isSelected ? 'var(--cyan)' : cam.status === 'offline' ? 'var(--t3)' : '#d7dce2',
+                  background: cam.alert ? 'var(--red)' : isSelected ? 'var(--cyan)' : cam.status === 'offline' ? 'var(--t3)' : 'var(--t1)',
                   borderRadius: '50%',
                   display: 'flex',
                   alignItems: 'center',
@@ -245,15 +245,14 @@ const MapView = () => {
                   boxShadow: isSelected ? '0 0 16px var(--cyan)' : '0 2px 8px rgba(0,0,0,0.5)',
                   transition: 'all 0.2s ease',
                 }}>
-                  {cam.alert ? <AlertTriangle size={18} color="#17191d" /> : <Crosshair size={18} color="#17191d" />}
+                  {cam.alert ? <AlertTriangle size={18} color="#ffffff" /> : <Crosshair size={18} color="#ffffff" />}
                 </div>
                 <div style={{
                   position: 'absolute',
                   top: '100%',
                   left: '50%',
                   transform: 'translateX(-50%)',
-                  background: 'rgba(18,20,24,0.92)',
-                  border: isSelected ? '1px solid var(--cyan)' : '1px solid rgba(255,255,255,0.1)',
+                  background: 'var(--bg-card)', border: isSelected ? '1px solid var(--cyan)' : '1px solid var(--border)',
                   padding: '2px 8px',
                   borderRadius: 4,
                   fontSize: '0.72rem',
@@ -301,7 +300,7 @@ const MapView = () => {
                       </button>
                     </div>
 
-                    <div style={{ width: '100%', height: 110, background: '#0b0c0e', borderRadius: 6, overflow: 'hidden', position: 'relative' }}>
+                    <div style={{ width: '100%', height: 110, background: 'var(--bg)', borderRadius: 6, overflow: 'hidden', position: 'relative' }}>
                       <img
                         src={apiUrl(`/cameras/${cam.id}/snapshot?t=${Date.now()}`)}
                         alt={cam.name}

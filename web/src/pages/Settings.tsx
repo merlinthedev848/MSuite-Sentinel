@@ -1008,12 +1008,12 @@ const Settings: React.FC = () => {
 
                 {/* Manual Add Form */}
                 {showManualForm && (
-                  <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'rgba(0,229,255,0.03)' }}>
+                  <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'var(--cyan-dim)' }}>
                     <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--cyan)', marginBottom: 14 }}>
                       {editingId ? `Edit Camera: ${manualForm.name || 'Selected'}` : '＋ New Camera'}
                     </div>
                     {editingId && (
-                      <div style={{ background: 'rgba(0,210,255,0.06)', border: '1px solid rgba(0,210,255,0.22)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: '0.78rem', color: 'var(--t2)', lineHeight: 1.5 }}>
+                      <div style={{ background: 'var(--cyan-dim)', border: '1px solid var(--cyan-border)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: '0.78rem', color: 'var(--t2)', lineHeight: 1.5 }}>
                         <strong style={{ color: 'var(--cyan)' }}>✦ Camera Settings:</strong> To rename the camera, simply change the name below and click Save. Existing stream URLs and ONVIF discovery parameters remain preserved unless you explicitly enter new values.
                       </div>
                     )}
@@ -1124,7 +1124,7 @@ const Settings: React.FC = () => {
                                     {zone.points.length >= 2 && (
                                       <polygon
                                         points={zone.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                        fill={zone.id === activeZoneId ? 'rgba(0, 230, 118, 0.22)' : 'var(--cyan-dim)'}
+                                        fill={zone.id === activeZoneId ? 'rgba(34, 197, 94, 0.22)' : 'var(--cyan-dim)'}
                                         stroke={zone.id === activeZoneId ? 'var(--green)' : 'var(--cyan)'}
                                         strokeWidth="0.004"
                                       />
@@ -1136,7 +1136,7 @@ const Settings: React.FC = () => {
                                         cy={point.y}
                                         r="0.012"
                                         fill={zone.id === activeZoneId ? 'var(--green)' : 'var(--cyan)'}
-                                        stroke="#001018"
+                                        stroke="var(--bg)"
                                         strokeWidth="0.004"
                                         onPointerDown={event => {
                                           event.stopPropagation();

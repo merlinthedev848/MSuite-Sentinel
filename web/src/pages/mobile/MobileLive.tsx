@@ -106,7 +106,7 @@ export const MobileLive: React.FC<MobileLiveProps> = ({
             <div className="mobile-fullview-title">
               <span className={`mobile-dot ${activeFullViewCam.status !== 'offline' ? 'online' : ''}`} />
               <span>{activeFullViewCam.name}</span>
-              <span style={{ fontSize: '0.65rem', padding: '2px 6px', borderRadius: 4, background: 'rgba(0,210,255,0.15)', color: 'var(--mobile-accent)' }}>
+              <span style={{ fontSize: '0.65rem', padding: '2px 6px', borderRadius: 4, background: 'var(--mobile-accent-dim)', color: 'var(--mobile-accent)' }}>
                 {qualities[activeFullViewCam.id]?.toUpperCase() || 'MAIN'}
               </span>
             </div>

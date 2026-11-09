@@ -16,9 +16,9 @@ const WallboardCell = React.memo<{ cam: Camera }>(({ cam }) => {
   const hasStream = Boolean(cam.rtsp_url_main || cam.rtsp_url_sub);
 
   return (
-    <div style={{ position: 'relative', background: '#121418', overflow: 'hidden' }}>
+    <div style={{ position: 'relative', background: 'var(--bg-card)', overflow: 'hidden' }}>
       {!hasStream ? (
-        <div style={{ height: '100%', display: 'grid', placeItems: 'center', color: '#6b7b95', gap: 8 }}>
+        <div style={{ height: '100%', display: 'grid', placeItems: 'center', color: 'var(--t3)', gap: 8 }}>
           <WifiOff size={28} />
           <span>{cam.name}</span>
         </div>
@@ -42,7 +42,7 @@ const WallboardCell = React.memo<{ cam: Camera }>(({ cam }) => {
           position: 'absolute',
           right: 10,
           top: 10,
-          color: '#e7d2ce',
+          color: 'var(--red)',
           fontSize: 12,
           fontWeight: 600,
           letterSpacing: 0,
@@ -108,7 +108,7 @@ const Wallboard: React.FC = () => {
 
   if (cameras.length === 0) {
     return (
-      <div style={{ minHeight: '100vh', width: '100vw', background: '#07111e', color: '#7ea6d6', display: 'grid', placeItems: 'center' }}>
+      <div style={{ minHeight: '100vh', width: '100vw', background: 'var(--bg)', color: 'var(--cyan)', display: 'grid', placeItems: 'center' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: '1.1rem' }}>
             <ShieldCheck size={26} color="var(--cyan)" />
@@ -130,7 +130,7 @@ const Wallboard: React.FC = () => {
     <div style={{
       width: '100vw',
       height: '100vh',
-      background: '#16181c',
+      background: 'var(--bg)',
       display: 'grid',
       gridTemplateColumns: `repeat(${columns}, 1fr)`,
       gridAutoRows: '1fr',
@@ -150,9 +150,9 @@ const Wallboard: React.FC = () => {
           display: 'flex',
           alignItems: 'center',
           gap: 10,
-          background: 'rgba(18, 20, 24, 0.85)',
+          background: 'var(--bg-card)',
           backdropFilter: 'blur(8px)',
-          border: '1px solid rgba(255, 255, 255, 0.12)',
+          border: '1px solid var(--border)',
           borderRadius: 8,
           padding: '6px 12px',
           boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)',
@@ -162,10 +162,10 @@ const Wallboard: React.FC = () => {
         onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
         onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; }}
       >
-        <span style={{ fontSize: '0.78rem', color: '#a8b4c2', fontFamily: 'monospace', marginRight: 6 }}>
+        <span style={{ fontSize: '0.78rem', color: 'var(--t2)', fontFamily: 'monospace', marginRight: 6 }}>
           {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
         </span>
-        <span style={{ fontSize: '0.72rem', color: '#7ea6d6', background: 'rgba(255, 255, 255, 0.05)', padding: '3px 8px', borderRadius: 4 }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--cyan)', background: 'rgba(255, 255, 255, 0.05)', padding: '3px 8px', borderRadius: 4 }}>
           {cameras.length} Feeds
         </span>
         <button
@@ -175,7 +175,7 @@ const Wallboard: React.FC = () => {
           style={{
             background: 'transparent',
             border: 'none',
-            color: '#e4e8ed',
+            color: 'var(--t1)',
             cursor: 'pointer',
             padding: 4,
             display: 'flex',
@@ -189,8 +189,7 @@ const Wallboard: React.FC = () => {
           title="Exit to Dashboard"
           aria-label="Exit to Dashboard"
           style={{
-            background: '#e4e8ed',
-            color: '#17191d',
+            background: 'var(--cyan)', color: '#ffffff',
             border: 'none',
             padding: '6px 12px',
             borderRadius: '6px',

@@ -87,9 +87,9 @@
   font-weight: 600;
   padding: 2px 7px;
   border-radius: 10px;
-  background: rgba(46, 213, 115, 0.12);
+  background: var(--mobile-success-dim);
   color: var(--mobile-success);
-  border: 1px solid rgba(46, 213, 115, 0.25);
+  border: 1px solid var(--mobile-border);
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -314,7 +314,7 @@
 
 .mobile-dot.online {
   background: var(--mobile-success);
-  box-shadow: 0 0 6px rgba(46, 213, 115, 0.6);
+  box-shadow: 0 0 6px var(--mobile-success);
 }
 
 /* ── Mobile Playback Player ───────────────────────────────────────── */
@@ -552,7 +552,7 @@
 
 .mobile-badge-vehicle {
   color: #ffa502;
-  background: rgba(255, 165, 2, 0.12);
+  background: var(--mobile-warning-dim);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 0.68rem;

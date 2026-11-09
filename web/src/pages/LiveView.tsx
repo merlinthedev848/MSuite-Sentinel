@@ -197,7 +197,7 @@ const cameraToAnalyticsZones = (cam: Camera): AnalyticsZone[] => {
 const ZONE_COLORS: Record<string, { border: string; bg: string; label: string }> = {
   motion: { border: 'var(--cyan)', bg: 'var(--cyan-dim)', label: 'Motion' },
   intrusion: { border: 'var(--red)', bg: 'var(--red-dim)', label: 'Intrusion' },
-  tripwire: { border: 'var(--amber)', bg: 'rgba(255, 165, 2, 0.14)', label: 'Tripwire' },
+  tripwire: { border: 'var(--amber)', bg: 'var(--amber-dim)', label: 'Tripwire' },
   privacy: { border: '#9b59b6', bg: 'rgba(20, 24, 33, 0.92)', label: 'Privacy Mask' },
 };
 
@@ -1383,7 +1383,7 @@ const LiveView: React.FC = () => {
                                 borderRadius: 3,
                                 cursor: 'se-resize',
                                 zIndex: 12,
-                                boxShadow: '0 0 6px rgba(0,210,255,0.8)',
+                                boxShadow: '0 0 6px var(--cyan)',
                               }}
                             />
                             {/* Bottom-Left Handle */}
@@ -1400,7 +1400,7 @@ const LiveView: React.FC = () => {
                                 borderRadius: 3,
                                 cursor: 'sw-resize',
                                 zIndex: 12,
-                                boxShadow: '0 0 6px rgba(0,210,255,0.8)',
+                                boxShadow: '0 0 6px var(--cyan)',
                               }}
                             />
                             {/* Top-Right Handle */}
@@ -1417,7 +1417,7 @@ const LiveView: React.FC = () => {
                                 borderRadius: 3,
                                 cursor: 'ne-resize',
                                 zIndex: 12,
-                                boxShadow: '0 0 6px rgba(0,210,255,0.8)',
+                                boxShadow: '0 0 6px var(--cyan)',
                               }}
                             />
                             {/* Top-Left Handle */}
@@ -1434,7 +1434,7 @@ const LiveView: React.FC = () => {
                                 borderRadius: 3,
                                 cursor: 'nw-resize',
                                 zIndex: 12,
-                                boxShadow: '0 0 6px rgba(0,210,255,0.8)',
+                                boxShadow: '0 0 6px var(--cyan)',
                               }}
                             />
                             {/* Live Dimension HUD */}
@@ -1528,7 +1528,7 @@ const LiveView: React.FC = () => {
                   padding: '8px 12px',
                   borderRadius: 6,
                   fontSize: '0.74rem',
-                  background: zoneToast.ok ? 'rgba(46, 213, 115, 0.15)' : 'rgba(255, 71, 87, 0.15)',
+                  background: zoneToast.ok ? 'var(--green-dim)' : 'var(--red-dim)',
                   border: zoneToast.ok ? '1px solid var(--green)' : '1px solid var(--red)',
                   color: zoneToast.ok ? 'var(--green)' : 'var(--red)',
                   display: 'flex',

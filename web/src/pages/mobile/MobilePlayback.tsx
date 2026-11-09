@@ -596,7 +596,7 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
               left: '50%',
               transform: 'translate(-50%, -50%)',
               background: 'rgba(0,0,0,0.8)',
-              border: `1px solid ${videoError ? 'var(--mobile-danger)' : 'rgba(0,210,255,0.4)'}`,
+              border: `1px solid ${videoError ? 'var(--mobile-danger)' : 'var(--mobile-accent)'}`,
               color: videoError ? 'var(--mobile-danger)' : '#fff',
               padding: '8px 14px',
               borderRadius: 8,
@@ -933,8 +933,7 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
                   <div style={{
                     padding: '8px 12px',
                     borderRadius: 8,
-                    background: 'rgba(255, 71, 87, 0.12)',
-                    border: '1px solid rgba(255, 71, 87, 0.3)',
+                    background: 'var(--mobile-danger-dim)', border: '1px solid var(--mobile-border)',
                     color: 'var(--mobile-danger)',
                     fontSize: '0.75rem',
                     marginBottom: 12
@@ -947,8 +946,7 @@ export const MobilePlayback: React.FC<MobilePlaybackProps> = ({
                   <div style={{
                     padding: '10px 12px',
                     borderRadius: 8,
-                    background: 'rgba(46, 213, 115, 0.12)',
-                    border: '1px solid rgba(46, 213, 115, 0.3)',
+                    background: 'var(--mobile-success-dim)', border: '1px solid var(--mobile-border)',
                     color: 'var(--mobile-success)',
                     fontSize: '0.75rem',
                     marginBottom: 12

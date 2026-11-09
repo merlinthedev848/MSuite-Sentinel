@@ -371,13 +371,13 @@ body {
 }
 
 .cam-cell:hover {
-  border-color: rgba(0, 210, 255, 0.45);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55), 0 0 12px rgba(0, 210, 255, 0.1);
+  border-color: var(--cyan-border);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
 }
 
 .cam-cell.has-motion {
   border-color: var(--red);
-  box-shadow: 0 0 16px rgba(255, 71, 87, 0.35);
+  box-shadow: 0 0 14px var(--red-dim);
 }
 
 .cam-cell video {
@@ -1308,7 +1308,7 @@ body {
 }
 .btn-outline:hover {
   background: var(--bg-card-hover);
-  border-color: rgba(0, 210, 255, 0.4);
+  border-color: var(--cyan-border);
   color: var(--cyan);
 }
 
@@ -1319,17 +1319,17 @@ body {
 }
 .btn-ghost:hover {
   background: var(--bg-card-hover);
-  border-color: rgba(0, 210, 255, 0.3);
+  border-color: var(--border-hover);
   color: var(--cyan);
 }
 
 .btn-danger {
-  background: rgba(255, 71, 87, 0.15);
+  background: var(--red-dim);
   color: var(--red);
-  border: 1px solid rgba(255, 71, 87, 0.3);
+  border: 1px solid rgba(239, 68, 68, 0.28);
 }
 .btn-danger:hover {
-  background: rgba(255, 71, 87, 0.28);
+  background: rgba(239, 68, 68, 0.22);
   border-color: var(--red);
 }
 
@@ -1357,7 +1357,7 @@ body {
 
 .form-input:focus, .form-select:focus {
   border-color: var(--cyan);
-  box-shadow: 0 0 0 2px rgba(0, 210, 255, 0.2);
+  box-shadow: 0 0 0 2px var(--cyan-dim);
 }
 
 /* ── Discovery items ─────────────────────────────────────────────── */
@@ -1425,13 +1425,13 @@ body {
   background: rgba(22, 25, 32, 0.95);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: 1px solid rgba(0, 210, 255, 0.35);
+  border: 1px solid var(--border);
   border-left: 3px solid var(--cyan);
   border-radius: var(--r-md);
   padding: 12px 18px;
   font-size: 0.84rem;
   color: var(--t1);
-  box-shadow: 0 12px 32px rgba(0,0,0,0.5), 0 0 15px rgba(0, 210, 255, 0.15);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.5);
   animation: toastIn 0.2s ease;
 }
 @keyframes toastIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }

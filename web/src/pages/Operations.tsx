@@ -641,7 +641,7 @@ const Operations: React.FC = () => {
                           borderRadius: 6,
                           fontWeight: 800,
                           fontSize: '0.85rem',
-                          background: aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? 'rgba(255, 71, 87, 0.15)' : (aiAnalysisResult.threat_level === 'MEDIUM' ? 'rgba(255, 165, 2, 0.15)' : 'rgba(46, 213, 115, 0.15)'),
+                          background: aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? 'var(--red-dim)' : (aiAnalysisResult.threat_level === 'MEDIUM' ? 'var(--amber-dim)' : 'var(--green-dim)'),
                           border: `1px solid ${aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? 'var(--red)' : (aiAnalysisResult.threat_level === 'MEDIUM' ? 'var(--amber)' : 'var(--green)')}`,
                           color: aiAnalysisResult.threat_level === 'CRITICAL' || aiAnalysisResult.threat_level === 'HIGH' ? 'var(--red)' : (aiAnalysisResult.threat_level === 'MEDIUM' ? 'var(--amber)' : 'var(--green)'),
                         }}>
@@ -650,7 +650,7 @@ const Operations: React.FC = () => {
                       </div>
 
                       {/* Scene Description */}
-                      <div style={{ padding: 14, background: 'rgba(0, 210, 255, 0.03)', borderRadius: 8, border: '1px solid var(--cyan-dim)' }}>
+                      <div style={{ padding: 14, background: 'var(--cyan-dim)', borderRadius: 8, border: '1px solid var(--cyan-border)' }}>
                         <div style={{ fontSize: '0.72rem', color: 'var(--cyan)', fontWeight: 700, textTransform: 'uppercase', marginBottom: 6 }}>
                           AI Visual Scene Summary
                         </div>
